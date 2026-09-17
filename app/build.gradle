@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.shenji.game'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "com.shenji.game"
+        minSdk 24          // 安卓 7.0（API 24）—— 向下兼容到安卓 7
+        targetSdk 36       // 安卓 16（API 36）—— 向上兼容到最新；一个包通吃 7/9/12/14/16
+        versionCode 77
+        versionName "0.77"
+    }
+
+    signingConfigs {
+        fixed {
+            storeFile file('shenji.keystore')
+            storePassword 'shenji2026'
+            keyAlias 'shenji'
+            keyPassword 'shenji2026'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.fixed
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.fixed
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
