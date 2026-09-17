@@ -78,6 +78,11 @@ public class GameView extends GLSurfaceView {
         renderer.enterWhiteSea();
     }
 
+    /** ★ 走到蒙尔斯洛斯脚下时回调（白色之海 · A 方案收尾） */
+    public void setSeaListener(GameRenderer.SeaListener l) {
+        renderer.setSeaListener(l);
+    }
+
     /** 是否正在「无界 · 纯白走廊」里（此时轻触屏幕 = 确认自己还在） */
     public boolean isCorridor() {
         return renderer.isCorridor();

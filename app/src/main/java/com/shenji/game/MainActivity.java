@@ -210,6 +210,19 @@ public class MainActivity extends Activity {
                 recreate();
             }
         });
+
+        // ★ 走到蒙尔斯洛斯脚下 → 世界海收尾（停下、仰望，再亮出「第二位神域」字卡）
+        gameView.setSeaListener(new GameRenderer.SeaListener() {
+            @Override
+            public void onSeaArrived() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        finishWhiteSea();
+                    }
+                });
+            }
+        });
     }
 
     private int dp(int v) {
@@ -300,17 +313,50 @@ public class MainActivity extends Activity {
             }, 600L);
         } catch (Throwable ignored) {
         }
-        hint.setVisibility(View.GONE);
         hud.setVisibility(View.GONE);
-        // ★ 一闪之后不是直达下一神域：先坠入世界海 · 白色之海
-        //    乳白的流质、无岸无参照，蒙尔斯洛斯远立雾中 —— 漂 12 秒，只有自己的呼吸还在
+        // ★ 一闪之后不是直达下一神域：坠入「世界海 · 白色之海」。
+        //    这一次把方向盘交给玩家 —— 让他自己走向雾中的蒙尔斯洛斯。
         gameView.enterWhiteSea();
+        // 海面上重新交还操控（走廊里曾把摇杆 / 跳跃收起）
+        joystick.setVisibility(View.VISIBLE);
+        jumpBtn.setVisibility(View.VISIBLE);
+        // 极淡的引导（这一境属于听觉，提示从简）
+        hint.setVisibility(View.VISIBLE);
+        hint.setText("（海面无边，只有呼吸）");
+        hint.setAlpha(0f);
+        hint.animate().alpha(0.30f).setDuration(2000).start();
         root.postDelayed(new Runnable() {
             @Override
             public void run() {
+                if (hint.getVisibility() == View.VISIBLE) {
+                    hint.setText("（向雾中的祂走去）");
+                    hint.animate().alpha(0.30f).setDuration(1200).start();
+                }
+            }
+        }, 9000L);
+    }
+
+    /**
+     * ★ 走到蒙尔斯洛斯脚下 —— 世界海 · 收尾（A 方案）：
+     *   收起操控 → 站定仰望 2.4 秒 → 亮出「第二位神域」字卡。
+     */
+    private void finishWhiteSea() {
+        joystick.setVisibility(View.INVISIBLE);
+        jumpBtn.setVisibility(View.INVISIBLE);
+        hint.animate().alpha(0f).setDuration(900).start();
+        root.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                hint.setVisibility(View.GONE);
+            }
+        }, 950L);
+        root.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                gameView.freeze(true);   // 字卡期间锁住走动与转视角
                 next.start();
             }
-        }, 12000L);
+        }, 2400L);
     }
 
     /**

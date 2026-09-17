@@ -75,7 +75,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private final List<Obj> objs = new ArrayList<>();
 
     private final Context ctx;
-    private int texFloor = 0, texWall = 0, texDeity = 0, texPlayer = 0, texCorridor = 0, texMsls = 0;
+    private int texFloor = 0, texWall = 0, texDeity = 0, texPlayer = 0, texCorridor = 0, texMsls = 0, texSea = 0;
     private Obj playerObj = null;   // 玩家模型（每帧跟随）
 
     // ---- ★ 九酒之问 / 转场状态 ----
@@ -104,7 +104,11 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private boolean summoned = false;            // 是否已触发觐见
     // ---- 世界海 · 白色之海 ----
     private float seaT = 0f;                     // 白色之海计时
-    private float seaDist = 0f;                  // 已在海面上漂过的距离
+    private float seaDist = 0f;                  // 已在海面上走过的距离
+    private boolean seaArrived = false;          // 是否已走到蒙尔斯洛斯脚下
+    private static final float SEA_ARRIVE_Z = -32f;   // 抵达线（神像在 z=-42，此处距祂约 10m）
+    private static final float SEA_WALK_SPEED = 3.2f; // 海面上的行走速度
+    private static final float SEA_EYE_HEIGHT = 1.46f;// 海面上视点高度（比陆地略低，像涉水而行）
 
     public interface SummonListener {
         void onSummoned();
@@ -114,6 +118,17 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
     public void setSummonListener(SummonListener l) {
         this.summonListener = l;
+    }
+
+    /** ★ 世界海 · 白色之海：玩家真的走到蒙尔斯洛斯脚下时触发（A 方案收尾） */
+    public interface SeaListener {
+        void onSeaArrived();
+    }
+
+    private SeaListener seaListener;
+
+    public void setSeaListener(SeaListener l) {
+        this.seaListener = l;
     }
 
     /** 质询中锁住移动 / 转视角（相机被钉在祂脸上） */
@@ -165,14 +180,27 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         buildCourtRoom();
     }
 
-    /** ★ 下一重境：坠入「世界海 · 白色之海」。乳白海镜之上，蒙尔斯洛斯远立雾中 */
+    /** ★ 下一重境：坠入「世界海 · 白色之海」。乳白海镜之上，蒙尔斯洛斯远立雾中。
+     *  与走廊不同 —— 这里【可以自由走动】，由玩家自己走向祂。 */
     public void enterWhiteSea() {
         mode = MODE_SEA;
-        frozen = true;
+        frozen = false;               // ★ 自由移动
         seaT = 0f;
         seaDist = 0f;
+        seaArrived = false;
+        px = 0f;
+        pz = 12f;                     // 从神像前方 54m 处出发
+        py = 0f;
+        vy = 0f;
+        grounded = true;
+        yaw = 0f;                     // 面向神像（-z 方向）
+        pitch = -2f;
         moveX = 0f;
         moveY = 0f;
+        bobPhase = 0f;
+        bob = 0f;
+        gaze = 0f;
+        reverse = 0f;
         if (stepStreamId != -1 && soundPool != null) {
             soundPool.stop(stepStreamId);
             stepStreamId = -1;
@@ -292,6 +320,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         // 纯白走廊的板材贴图：极淡的接缝网格 —— 它存在的唯一意义，就是让「还在往前走」看得见
         texCorridor = loadTexture("textures/corridor_wall.jpg", false);
         texMsls = loadTexture("textures/msls_tex.jpg", false);
+        // 白色之海的海面贴图：柔和的乳白流质波纹（程序生成）
+        texSea = loadTexture("textures/sea_water.jpg", false);
 
         // ③ 加载音频
         report("加载音频", 64);
@@ -361,23 +391,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             return;
         }
 
-        // ---- 世界海 · 白色之海：无岸无参照，缓缓漂向雾中的蒙尔斯洛斯 ----
-        if (mode == MODE_SEA) {
-            // 漂得极慢，起伏比走廊更轻 —— 像浮在乳白的流质上，而不是走在地上
-            float cy = 1.30f + (float) Math.sin(seaT * 0.9f) * 0.018f;
-            float cx = (float) Math.sin(seaT * 0.45f) * 0.03f;
-            float cz = 18f - seaDist;
-            Matrix.setLookAtM(view, 0, cx, cy, cz, cx, cy - 0.02f, cz - 1f, 0f, 1f, 0f);
-            Matrix.multiplyMM(vp, 0, proj, 0, view, 0);
-            shader.use();
-            GLES20.glUniform3f(shader.uLightDir, 0.1f, -1f, 0.15f);
-            GLES20.glUniform3f(shader.uAmbient, 1.02f, 1.02f, 1.04f);
-            GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
-            GLES20.glUniform1f(shader.uFogNear, 8.0f);
-            GLES20.glUniform1f(shader.uFogFar, 55f);
-            for (int i = 0; i < objs.size(); i++) drawObj(objs.get(i));
-            return;
-        }
+        // ---- 世界海 · 白色之海：复用常规第一人称相机（自由走动），仅在下方雾/环境分支里换色 ----
 
         float radYaw = (float) Math.toRadians(yaw);
         float radPitch = (float) Math.toRadians(pitch);
@@ -387,8 +401,9 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
         // 相机 = 人物头部中央 + 沿水平视线前移一点点（身体随 yaw 转动，见 update()）
         float hx = (float) Math.sin(radYaw), hz = (float) -Math.cos(radYaw);
+        float eyeH = (mode == MODE_SEA) ? SEA_EYE_HEIGHT : EYE_HEIGHT;
         float camX = px + hx * EYE_FORWARD;
-        float camY = py + EYE_HEIGHT + bob;
+        float camY = py + eyeH + bob;
         float camZ = pz + hz * EYE_FORWARD;
 
         Matrix.setLookAtM(view, 0,
@@ -399,7 +414,14 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
         shader.use();
         GLES20.glUniform3f(shader.uLightDir, 0.3f, 0.92f, 0.4f);
-        if (collapseT >= 0f) {
+        if (mode == MODE_SEA) {
+            // 世界海 · 白色之海：无岸、无天、无地平线。乳白过曝的海面一直漫进远处的雾里
+            GLES20.glUniform3f(shader.uLightDir, 0.10f, 0.98f, 0.14f);
+            GLES20.glUniform3f(shader.uAmbient, 0.72f, 0.72f, 0.76f);
+            GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
+            GLES20.glUniform1f(shader.uFogNear, 12f);
+            GLES20.glUniform1f(shader.uFogFar, 64f);
+        } else if (collapseT >= 0f) {
             // 崩塌：边界被抹除的那一刻，庭中血色浓起来，尽头只剩一片暗红
             GLES20.glUniform3f(shader.uAmbient, 0.50f, 0.055f, 0.065f);
             GLES20.glUniform3f(shader.uFogColor, 0.13f, 0.012f, 0.017f);
@@ -490,14 +512,39 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             return;
         }
 
-        // ---- 世界海 · 白色之海：缓缓前漂；这一境属于「听觉」—— 只有自己的呼吸还在 ----
+        // ---- 世界海 · 白色之海：自由走动，走向雾中的蒙尔斯洛斯 ----
+        //   这一境属于「听觉」—— 脚下的海不发声，只剩自己的呼吸
         if (mode == MODE_SEA) {
             seaT += dt;
-            seaDist += dt * 0.9f;
+            float rad = (float) Math.toRadians(yaw);
+            float fwdX = (float) Math.sin(rad), fwdZ = (float) -Math.cos(rad);
+            float rgtX = (float) Math.cos(rad), rgtZ = (float) Math.sin(rad);
+            px += (fwdX * moveY + rgtX * moveX) * SEA_WALK_SPEED * dt;
+            pz += (fwdZ * moveY + rgtZ * moveX) * SEA_WALK_SPEED * dt;
+            // 海面无边，但别让玩家走得太偏／穿到神像身后
+            px = clamp(px, -46f, 46f);
+            pz = clamp(pz, -37.5f, 16f);
+            seaDist = Math.max(seaDist, 12f - pz);
+
+            float moving = Math.abs(moveX) + Math.abs(moveY);
+            if (moving > 0.08f) {
+                bobPhase += dt * 6.6f;                 // 涉水而行的轻晃
+                bob = (float) Math.sin(bobPhase) * 0.034f;
+            } else {
+                bob *= 0.92f;
+            }
+
             if (soundPool != null && breathStreamId > 0) {
-                // 呼吸声缓慢涨落，像海的潮汐
-                float v = 0.22f + 0.10f * (float) Math.sin(seaT * 0.5f);
+                // 呼吸声缓慢涨落，像海的潮汐；越靠近祂，呼吸越沉
+                float near = clamp((12f - pz) / 44f, 0f, 1f);
+                float v = 0.22f + 0.10f * (float) Math.sin(seaT * 0.5f) + near * 0.22f;
                 soundPool.setVolume(breathStreamId, v, v);
+            }
+
+            // ★ 走到祂脚下 → 交回 MainActivity 收尾（A：弹「第二位神域」字卡）
+            if (!seaArrived && pz <= SEA_ARRIVE_Z) {
+                seaArrived = true;
+                if (seaListener != null) seaListener.onSeaArrived();
             }
             return;
         }
@@ -761,23 +808,77 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         eyeObjs.clear();
         playerObj = null;
         floorObj = null;
-        Mesh box = MeshBuilder.box();
         Obj o;
-        // 海面：乳白流质。用走廊砖纹超大平铺，留下一层几乎看不见的肌理
-        o = add(box, 0f, -0.12f, -60f, 240f, 0.24f, 240f, 0.99f, 0.99f, 1f);
-        o.texId = texCorridor; o.uvTiling = 90f; o.uvTilingV = 90f;
-        o.emissive = 0.10f;
-        // ★ 蒙尔斯洛斯：白雾尽头远立（约 42m 外，被雾半掩）
+
+        // ★ 海面：一整片会「呼吸」的乳白流质（起伏网格 + 柔和水纹贴图）
+        //   不再拿走廊的砖纹去平铺 —— 那看着像地板，不像海。
+        o = new Obj();
+        o.mesh = makeSeaPlane(300f, 96, 0.11f);
+        o.x = 0f; o.y = 0f; o.z = -60f;
+        o.sx = 1f; o.sy = 1f; o.sz = 1f;
+        o.tr = 0.985f; o.tg = 0.985f; o.tb = 1.0f;
+        o.texId = texSea; o.uvTiling = 30f;
+        o.emissive = 0.16f;            // 海面自身泛着极淡的光，像一路过曝的白
+        objs.add(o);
+
+        // ★ 蒙尔斯洛斯：白雾尽头远立（z=-42，被雾半掩）
         Mesh msls = loadMeshBin("msls_mesh.bin");
         if (msls != null) {
             o = add(msls, 0f, 0f, -42f, 14f, 14f, 14f, 1f, 1f, 1f);
             o.texId = texMsls; o.uvTiling = 1f;
             // 海镜倒影：y 翻转副本，沉在海面之下，淡一些（仿镜室的做法）
-            o = add(msls, 0f, 0f, -42f, 14f, -14f, 14f, 0.72f, 0.72f, 0.78f);
+            o = add(msls, 0f, 0f, -42f, 14f, -14f, 14f, 0.74f, 0.74f, 0.82f);
             o.texId = texMsls; o.uvTiling = 1f;
         } else {
-            add(box, 0f, 6f, -42f, 3f, 12f, 3f, 0.9f, 0.9f, 0.95f);   // 兜底占位
+            add(MeshBuilder.box(), 0f, 6f, -42f, 3f, 12f, 3f, 0.9f, 0.9f, 0.95f); // 兜底占位
         }
+    }
+
+    /**
+     * 程序生成的海面网格：一张 size×size 的细分平面，顶点带极小的柔和起伏。
+     * 起伏很浅（远小于视点高度），但足以让方向光在水面拉出「波光」的明暗 —— 这才像海。
+     */
+    private Mesh makeSeaPlane(float size, int seg, float amp) {
+        int vCount = (seg + 1) * (seg + 1);
+        float[] verts = new float[vCount * 11];
+        short[] idx = new short[seg * seg * 6];
+        int vi = 0;
+        for (int j = 0; j <= seg; j++) {
+            float v = (float) j / seg;
+            float z = -size * 0.5f + size * v;
+            for (int i = 0; i <= seg; i++) {
+                float u = (float) i / seg;
+                float x = -size * 0.5f + size * u;
+                double a = x * 0.105 + z * 0.062;
+                double b = z * 0.140 - x * 0.046;
+                double c2 = (x + z) * 0.188;
+                float y = amp * (float) (Math.sin(a) * 0.5 + Math.sin(b) * 0.3 + Math.sin(c2) * 0.2);
+                // 法线 ≈ 高度梯度 (∂y/∂x, ∂y/∂z)
+                float dyx = amp * (float) (Math.cos(a) * 0.105 * 0.5
+                        + Math.cos(b) * (-0.046) * 0.3 + Math.cos(c2) * 0.188 * 0.2);
+                float dyz = amp * (float) (Math.cos(a) * 0.062 * 0.5
+                        + Math.cos(b) * 0.140 * 0.3 + Math.cos(c2) * 0.188 * 0.2);
+                float nx = -dyx, ny = 1f, nz = -dyz;
+                float nl = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+                nx /= nl; ny /= nl; nz /= nl;
+                verts[vi++] = x; verts[vi++] = y; verts[vi++] = z;
+                verts[vi++] = nx; verts[vi++] = ny; verts[vi++] = nz;
+                verts[vi++] = 1f; verts[vi++] = 1f; verts[vi++] = 1f;
+                verts[vi++] = u; verts[vi++] = v;
+            }
+        }
+        int ii = 0;
+        for (int j = 0; j < seg; j++) {
+            for (int i = 0; i < seg; i++) {
+                short p0 = (short) (j * (seg + 1) + i);
+                short p1 = (short) (p0 + 1);
+                short p2 = (short) (p0 + seg + 1);
+                short p3 = (short) (p2 + 1);
+                idx[ii++] = p0; idx[ii++] = p2; idx[ii++] = p1;
+                idx[ii++] = p1; idx[ii++] = p2; idx[ii++] = p3;
+            }
+        }
+        return new Mesh(verts, idx);
     }
 
     /**
