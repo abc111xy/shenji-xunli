@@ -267,7 +267,7 @@ public class NineWines {
             return null;
         }
 
-        /** 玩家作答：返回本轮结果，并推进状态机 */
+        /** 玩家作答（固定选项）：返回本轮结果，并推进状态机 */
         public Result answer(int choice) {
             Question q = question();
             int kind = q.kinds[choice];
@@ -281,6 +281,30 @@ public class NineWines {
             rec.silent = (kind == 2);
             history.add(rec);
 
+            return advance(q, kind);
+        }
+
+        /**
+         * ★ 玩家自定义回答：kind 由大模型审判（LlmJudge）给出。
+         * 注意：必须先拿到 kind 再调本方法 —— 是否崩塌由祂说了算。
+         */
+        public Result answerCustom(String text, int kind) {
+            Question q = question();
+
+            AnswerRecord rec = new AnswerRecord();
+            rec.round = q.round;
+            rec.choice = -1;          // -1 = 自定义回答（复答时原样钉回）
+            rec.kind = kind;
+            rec.text = text;
+            rec.catastrophic = (kind == 0);
+            rec.silent = (kind == 2);
+            history.add(rec);
+
+            return advance(q, kind);
+        }
+
+        /** 推进状态机：kind 决定崩塌还是继续（固定选项与自定义回答共用） */
+        private Result advance(Question q, int kind) {
             Result r = new Result();
             if (kind == 0) {
                 // 铁律一：答错 → 脚下边界崩塌，坠入无界（死得浅：还没被献祭够）

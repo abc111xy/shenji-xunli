@@ -47,6 +47,8 @@ public class TrialView extends View {
     private NineWines.Result last;
 
     private final float[] optY = new float[3];
+    private float optYCustom = -1f;
+    private boolean judging = false;
     private LinearGradient gTop, gBottom;
     private RadialGradient gCenter;
     private int cachedW, cachedH;
@@ -142,16 +144,27 @@ public class TrialView extends View {
         float aA = fade(tIn, 0.38f, 0.55f);
         textFit(c, q.ask, w / 2f, (384 + base) * s, w * 0.90f, 42 * s, alpha(0xFFFFFFFF, aA));
 
-        // ---- 三个选项 ----
+        // ---- 三个选项 + 第四行：自定义回答（交予祂审判）----
         float y0 = (452 + base * 0.6f) * s;
+        float gap = (base > 0f) ? 62f : 72f;   // 有复答行时压缩间距，给第四行腾地方
         for (int i = 0; i < 3; i++) {
-            float oy = y0 + i * 72 * s;
+            float oy = y0 + i * gap * s;
             optY[i] = oy;
             float a = fade(tIn, 0.55f + i * 0.14f, 0.40f);
             if (!awaiting) a *= 0.5f;
             textFit(c, q.options[i], w / 2f, oy, w * 0.86f, 27 * s, alpha(0xFFFFFFFF, a));
             fill.setColor(alpha(0x46D9BE86, a));
             c.drawRect(w / 2f - 300 * s, oy + 11 * s, w / 2f + 300 * s, oy + 12.4f * s, fill);
+        }
+        optYCustom = y0 + 3f * gap * s;
+        float aC = fade(tIn, 1.05f, 0.40f);
+        if (!awaiting) aC *= 0.5f;
+        textFit(c, "\u3007 自定义回答 · 交由祂审判", w / 2f, optYCustom, w * 0.86f, 25 * s, alpha(0xFF9FB6D9, aC));
+
+        // ---- 等待模型审判的呼吸提示 ----
+        if (judging) {
+            float aJ = 0.45f + 0.20f * (float) Math.sin(now / 300.0);
+            textFit(c, "（ 风停了。祂在听。）", w / 2f, 700 * s, w * 0.88f, 24 * s, alpha(0xFFD9BE86, aJ));
         }
 
         // ---- 神的回应 ----
@@ -243,6 +256,9 @@ public class TrialView extends View {
                     break;
                 }
             }
+            if (optYCustom > 0f && Math.abs(y - optYCustom) < 40 * s) {
+                openCustomInput();
+            }
         }
         return true;
     }
@@ -264,6 +280,72 @@ public class TrialView extends View {
                     @Override
                     public void run() {
                         reply = (line == null) ? NineWines.localReply(q.round, kind) : line;
+                        invalidate();
+                    }
+                });
+            }
+        });
+    }
+
+    /** 自定义回答：弹输入框，玩家的话由 LlmJudge 发给大模型审判 */
+    private void openCustomInput() {
+        final android.widget.EditText et = new android.widget.EditText(getContext());
+        et.setTextColor(0xFFFFFFFF);
+        et.setHintTextColor(0x66FFFFFF);
+        et.setHint("回答祂……");
+        et.setTypeface(serif);
+        android.widget.FrameLayout box = new android.widget.FrameLayout(getContext());
+        int m = (int) (20 * getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout.LayoutParams lp = new android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(m, m / 2, m, 0);
+        box.addView(et, lp);
+
+        final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(getContext())
+                .setTitle("自定义回答")
+                .setMessage("祂不接受套话。你的话将由祂亲自审判——答错，脚下即无界。")
+                .setView(box)
+                .setPositiveButton("呈 上", null)   // 手动接管，挡空回答
+                .setNegativeButton("退 回", null)
+                .create();
+        dlg.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
+            @Override
+            public void onShow(android.content.DialogInterface d) {
+                ((android.app.AlertDialog) d).getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                        .setOnClickListener(new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                String t = et.getText().toString().trim();
+                                if (t.isEmpty()) return;
+                                dlg.dismiss();
+                                submitCustom(t);
+                            }
+                        });
+            }
+        });
+        dlg.show();
+    }
+
+    /** 呈上自定义回答：先进入「聆听」状态，模型判定回来后推进状态机 */
+    private void submitCustom(final String text) {
+        if (!awaiting || session == null) return;
+        awaiting = false;
+        judging = true;
+        invalidate();
+
+        final NineWines.Question q = session.question();
+        LlmJudge.judge(q, text, session.history, new LlmJudge.Callback() {
+            @Override
+            public void onVerdict(final LlmJudge.Verdict v) {
+                post(new Runnable() {
+                    @Override
+                    public void run() {
+                        judging = false;
+                        if (session == null) return;
+                        last = session.answerCustom(text, v.kind);
+                        reply = v.reply;
+                        tReply = System.currentTimeMillis();
                         invalidate();
                     }
                 });
