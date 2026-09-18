@@ -10,8 +10,8 @@ android {
         applicationId "com.shenji.game"
         minSdk 24          // 安卓 7.0（API 24）—— 向下兼容到安卓 7
         targetSdk 36       // 安卓 16（API 36）—— 向上兼容到最新；一个包通吃 7/9/12/14/16
-        versionCode 79
-        versionName "0.79"
+        versionCode 100
+        versionName "1.0"
     }
 
     signingConfigs {
