@@ -58,6 +58,9 @@ public class GameView extends GLSurfaceView {
     /** ★ 发动时力（长按开火键） */
     public void activateShili() { renderer.activateShili(); }
 
+    /** ★ 血字砸屏播完 → 正式开战 */
+    public void startBossNow() { renderer.startBossNow(); }
+
     /** 觐见（走近并仰望神像）→ 触发九酒之问 */
     public void setSummonListener(GameRenderer.SummonListener l) {
         renderer.setSummonListener(l);

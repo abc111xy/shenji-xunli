@@ -389,6 +389,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             GLES20.glUniform1f(shader.uFogNear, 2.0f);
             GLES20.glUniform1f(shader.uFogFar, 30f);
             if (mode == MODE_BOSS) drawBossWorld();
+            if (abyssActive && actStage == 2) drawAbyssRope();
             for (int i = 0; i < objs.size(); i++) drawObj(objs.get(i));
             return;
         }
@@ -417,13 +418,24 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         shader.use();
         GLES20.glUniform3f(shader.uLightDir, 0.3f, 0.92f, 0.4f);
         if (mode == MODE_SEA) {
-            // 世界海 · 白色之海（★ 剥夺中逐渐白化封死）
-            float wk = depriveActive ? clamp(depriveT / 24f, 0f, 1f) : 0f;
+            // 世界海 · 白色之海（★ 四幕：白→钢蓝→白 + 全程白化封死 + 黑屏）
+            float dk = (abyssActive && actT < 12f)
+                    ? (actT < 6f ? actT / 6f : 1f - (actT - 6f) / 6f) : 0f;
+            float wk = abyssActive ? clamp((actT - 12f) / 26f, 0f, 1f) : 0f;
+            float ambR = 0.72f + (0.34f - 0.72f) * dk + 0.28f * wk;
+            float ambG = 0.72f + (0.40f - 0.72f) * dk + 0.28f * wk;
+            float ambB = 0.76f + (0.52f - 0.76f) * dk + 0.24f * wk;
             GLES20.glUniform3f(shader.uLightDir, 0.10f, 0.98f, 0.14f);
-            GLES20.glUniform3f(shader.uAmbient, 0.72f + 0.28f * wk, 0.72f + 0.28f * wk, 0.76f + 0.24f * wk);
+            GLES20.glUniform3f(shader.uAmbient, ambR, ambG, ambB);
             GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
-            GLES20.glUniform1f(shader.uFogNear, 12f - 10f * wk);
-            GLES20.glUniform1f(shader.uFogFar, 64f - 58f * wk);
+            GLES20.glUniform1f(shader.uFogNear, 12f - 10f * wk - 6f * dk);
+            GLES20.glUniform1f(shader.uFogFar, 64f - 58f * wk - 30f * dk);
+            if (blind) {
+                // 黑屏：纯黑 + 白色倒计时（UI 层），音频不黑
+                GLES20.glClearColor(0f, 0f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
+                return;
+            }
         } else if (mode == MODE_BOSS) {
             // ★ 时间海本体战：月银雾
             GLES20.glUniform3f(shader.uLightDir, 0.10f, 0.98f, 0.14f);
@@ -561,10 +573,11 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             // ★ 走到祂脚下 → 交回 MainActivity 收尾（A：弹「第二位神域」字卡）
             if (mode == MODE_SEA && !seaArrived && pz <= SEA_ARRIVE_Z) {
                 seaArrived = true;
-                startDeprive();          // ★ 蒙尔斯洛斯：靠近本体 → 幻境剥夺
+                beginAbyss();            // ★ 蒙尔斯洛斯：靠近本体 → 坠入幻境（四幕）
             }
             if (mode == MODE_BOSS) updateBoss(dt);
-            if (depriveActive) updateDeprive(dt);
+            if (abyssActive) updateAbyss(dt);
+            if (blind) updateBlind(dt);
             return;
         }
 
@@ -743,11 +756,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         } else {
             sb.append(muteGapT > 0f ? "—— 祂在吸气 ——\n"
                     : "供给中 · 第 " + cycle + " 轮 (" + pagesInCycle + "/42)" + (firing ? "  ·  在读" : "") + "\n");
-            if (hasShili) {
-                sb.append(slowT > 0f ? "时力 · 余 " + (int) Math.ceil(slowT) + "s\n"
-                      : (slowCd > 0f ? "时力 · 冷却 " + (int) Math.ceil(slowCd) + "s\n"
-                                     : "时力 · 就绪（长按开火）\n"));
-            }
+            if (hitchT > 0f) sb.append("世界漏一拍 · 余 ").append((int) Math.ceil(hitchT)).append("s\n");
+            if (hasShili) sb.append("boon · 世界漏一拍（已归你）\n");
             if (deaths > 0) sb.append("你被光穿过 ").append(deaths).append(" 次\n");
         }
         return sb.toString();
@@ -1124,9 +1134,15 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     // ================================================================
     private static final float BOSS_X = 0f, BOSS_Z = -42f, BOSS_Y = 4.2f;
 
-    private boolean depriveActive = false;
-    private float depriveT = 0f;
-    private int depriveStep = -1;
+    // ★ 阶段一 · 深渊四幕（docs/项目整合总览）：坠(12s) → 挣扎(13s) → 绳(9s) → 幻(6s) → 黑屏9s → 血字
+    private boolean abyssActive = false;
+    private int actStage = -1;          // 0坠 1挣扎 2绳 3幻 4黑屏
+    private float actT = 0f;
+    private int senseStep = 0;
+    private float senseT = 0f;
+    private int ropeStep = -1;
+    private int lastBlindSec = -1;
+    private boolean preBossBlackout = false;
 
     private float bossHp = 100f;
     private float bossT = 0f;
@@ -1153,15 +1169,25 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private int deaths = 0;
     private float invulnT = 0f;
 
-    private boolean hasShili = false;
-    private float slowT = 0f, slowCd = 0f;
+    private boolean hasShili = false;      // boon:world_hitch（跨副本永久，环境残余所有权的凭据）
+    private float hitchT = 0f;             // 「世界漏一拍」剩余时间（环境残余，自动触发）
+    private int nextHitch = 75;            // 下一拍阈值：75/50/25
+    private float selfStunT = 0f;          // 低血量时光线打到她自己脚边的硬直
 
     private Mesh mBossRobe, mBossTorso, mBossHead, mBossArm, mBossHalo, mBeam;
     private boolean bossMeshesOk = false;
 
     public interface EventListener {
-        void onNarrate(String text);
-        void onBossDefeated();
+        void onNarrate(String text);        // 幻境/战斗旁白
+        void onBossDefeated();              // 通关：授予 boon
+        void onBlindTick(int secsLeft);     // 9秒黑屏每秒回调（白色倒计时，战前与战中共用）
+        void onBlindEnd(boolean preBoss);   // true → UI 播血字砸屏后调 startBossNow()
+    }
+
+    /** ★ 血字砸屏播完 → 正式开战（由 MainActivity 调用） */
+    public void startBossNow() {
+        abyssActive = false;
+        enterBoss();
     }
     private EventListener eventListener;
     public void setEventListener(EventListener l) { eventListener = l; }
@@ -1169,45 +1195,120 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     public boolean getHasShili() { return hasShili; }
     public void setFiring(boolean v) { firing = v; }
 
-    /** ★ 时力：二十秒的时间归你支配（长按开火键发动） */
-    public void activateShili() {
-        if (!hasShili || mode != MODE_BOSS || slowT > 0f || slowCd > 0f) return;
-        slowT = 20f; slowCd = 45f;
-        narrate("时力——二十秒的时间，归你支配。");
-    }
+    /** ★ 环境残余：玩家不可主动发动（docs/环境残余时力规格）。
+     *  玩家不是拥有时力，只是站在她溅出来的那一拍里。 */
+    public void activateShili() { /* 无主动入口——规格禁止玩家主动释放 */ }
 
-    private static final String[] DEPRIVE_LINES = {
-        "你失去了方位。", "声音退场。寂静是最先到达的。", "气味的记忆，散了。",
-        "白色漫上来。你看不见了。", "你再也摸不到自己。", "冷与热，一起作废。",
-        "重量是一种谎言。", "你在动吗？你无从知晓。", "深在上，浅在下。深浅颠倒。",
-        "连受罚的实感，也被没收。", "与世界最后的交换，归于平淡。", "恐惧退去。空洞得清醒。",
-        "过去的你，脱落了。", "「我」——正在崩解。", "你成了空白之人。成了绳索。" };
+    private static final String[] SENSE_LINES = {
+        "「你先走的那部分，不是你自己选的。」", "「你叫它名字，它才认你。」",
+        "「你记得的那团火，早就不是她的了。」", "「你学会疼，是因为有人先疼给你看。」",
+        "「你跑得很快，但你跑的是她的路。」", "「你记得她，是因为她先记住了你。」",
+        "「你连自己都留不住。」", "「你刚才想的那件事，已经不是你的了。」",
+        "（系统提示：远程投递——一件礼物。）", "「你以为那是你的手。」",
+        "「你记得怎么哭，但她已经不哭了。」", "（地面浮起一行字：她说你会需要这个。）",
+        "「你手里从来不是一把有弹药的枪。」", "（无声）" };
+
+    private static final String[] ROPE_LINES = {
+        "绳在水中自己动。", "绳头抬起，朝你来。", "它缠上来了。",
+        "你越挣扎，它越紧。", "你被提出了水面。" };
 
     private void narrate(String s) {
         if (eventListener != null) eventListener.onNarrate(s);
     }
 
-    private void startDeprive() {
-        depriveActive = true; depriveT = 0f; depriveStep = -1;
+    /** 幻境触发：四幕开场 */
+    private void beginAbyss() {
+        abyssActive = true; actStage = 0; actT = 0f;
+        ropeStep = -1; senseStep = 0; senseT = 0f;
         narrate("「凡人，请你领教海洋的魅力。」");
     }
 
-    private void updateDeprive(float dt) {
-        depriveT += dt;
-        int step = (int) (depriveT / 1.9f);
-        if (step > 14) step = 14;
-        if (step != depriveStep) {
-            depriveStep = step;
-            narrate(DEPRIVE_LINES[step]);
-            if (soundPool != null) {
-                float k = 1f - step / 15f;
-                if (stepStreamId != -1) soundPool.setVolume(stepStreamId, 0.6f * k, 0.6f * k);
-                if (breathStreamId != -1) soundPool.setVolume(breathStreamId, 0.3f * k, 0.3f * k);
+    private void updateAbyss(float dt) {
+        actT += dt;
+        float t = actT;
+        if (actStage == 0) {                        // 第一幕 · 坠入深海 0-12s
+            py -= 1.6f * dt;                        // 匀速下坠，无失重感
+            if (t >= 12f) { actStage = 1; narrate(SENSE_LINES[0]); }
+        } else if (actStage == 1) {                 // 第二幕 · 挣扎 12-25s（十四觉 0.93s/觉）
+            senseT += dt;
+            int n = Math.min(13, (int) (senseT / 0.93f));
+            if (n != senseStep) {
+                senseStep = n;
+                narrate(SENSE_LINES[n]);
+                if (soundPool != null) {
+                    float k = 1f - n / 14f;
+                    if (stepStreamId != -1) soundPool.setVolume(stepStreamId, 0.6f * k, 0.6f * k);
+                    if (breathStreamId != -1) soundPool.setVolume(breathStreamId, 0.3f * k, 0.3f * k);
+                }
+            }
+            if (t >= 25f) { actStage = 2; }
+        } else if (actStage == 2) {                 // 第三幕 · 被绳擒 25-34s
+            float rt = t - 25f;
+            int rs = rt < 2.4f ? 0 : rt < 4.2f ? 1 : rt < 5.8f ? 2 : rt < 7f ? 3 : 4;
+            if (rs != ropeStep) { ropeStep = rs; narrate(ROPE_LINES[rs]); }
+            if (rs == 4) {                          // 提离水面：镜头 78°→12°，全场唯一一次看见她的正脸
+                float k = clamp((rt - 7f) / 1.8f, 0f, 1f);
+                pitch = 78f - 66f * k;
+                py += 3f * dt;
+            }
+            if (t >= 34f) { actStage = 3; }
+        } else if (actStage == 3) {                 // 第四幕 · 幻觉破 34-40s（无字幕，三帧视觉）
+            pitch *= Math.max(0f, 1f - dt * 2f);    // 镜头缓缓回正
+            if (t >= 40f) { actStage = 4; startBlackout(true); }
+        }
+        // 输入剥夺：第六觉后前后颠倒，第八觉后左右也颠倒；全程阻力递增
+        // 输入剥夺（直接作用于移动输入标量）
+        if (actStage == 0) { moveX = 0f; moveY = 0f; }
+        else if (actStage == 1) {
+            float drag = 1f + (senseStep / 14f) * 1.8f;
+            moveX /= drag; moveY /= drag;
+            if (senseStep >= 6) moveY = -moveY;   // 动觉丧失：前后颠倒
+            if (senseStep >= 8) moveX = -moveX;   // 衡觉丧失：左右也颠倒
+        } else { moveX = 0f; moveY = 0f; }
+    }
+
+    /** ★ 9 秒黑屏（docs/光线工程规则）：白色倒计时，每秒 tick，音频不黑 */
+    private void startBlackout(boolean preBoss) {
+        blind = true; blindT = 9f; lastBlindSec = -1;
+        preBossBlackout = preBoss;
+        SaveManager.beginCritical("darkness");
+    }
+
+    private void updateBlind(float dt) {
+        blindT -= dt;
+        int sec = (int) Math.ceil(blindT);
+        if (sec != lastBlindSec) {
+            lastBlindSec = sec;
+            if (eventListener != null) eventListener.onBlindTick(sec);
+        }
+        if (blindT <= 0f) {
+            blind = false;
+            SaveManager.endCritical();
+            if (preBossBlackout) {
+                if (eventListener != null) eventListener.onBlindEnd(true);
+            } else {
+                invulnT = 2.5f;
+                px = 0f; pz = -24f;
+                narrate("视觉还给你。九秒，是她能给的最长耐心。");
+                if (eventListener != null) eventListener.onBlindEnd(false);
             }
         }
-        if (depriveT >= 14f * 1.9f + 2.5f) {
-            depriveActive = false;
-            enterBoss();
+    }
+
+    /** ★ 金绳：12 节环绕玩家盘旋上升（第三幕） */
+    private void drawAbyssRope() {
+        if (mBeam == null) mBeam = MeshBuilder.box();
+        for (int i = 0; i < 12; i++) {
+            float a = actT * 2.2f + i * 0.7f;
+            Obj o = new Obj();
+            o.mesh = mBeam;
+            o.x = px + (float) Math.sin(a) * 1.1f;
+            o.y = 0.4f + py + i * 0.22f;
+            o.z = pz + (float) Math.cos(a) * 1.1f;
+            o.rotY = (float) Math.toDegrees(a) + 90f;
+            o.sx = 0.10f; o.sy = 0.10f; o.sz = 0.9f;
+            o.tr = 1.0f; o.tg = 0.85f; o.tb = 0.45f; o.emissive = 0.8f;
+            drawObj(o);
         }
     }
 
@@ -1225,19 +1326,28 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private void enterBoss() {
         ensureBossMeshes();
         mode = MODE_BOSS;
-        px = 0f; pz = -24f; yaw = 0f; pitch = 0f;
+        px = 0f; pz = -24f; yaw = 0f; pitch = 0f; py = 0f;
         bossHp = 100f; bossT = 0f; deaths = 0;
         firing = false; fireAcc = 0f;
-        android.content.SharedPreferences ip = ctx.getSharedPreferences(
+        // v0→v1 兜底搬迁：旧 "ibliss" 文件 → ibliss:* 全键名
+        android.content.SharedPreferences oldIbliss = ctx.getSharedPreferences(
                 "ibliss", android.content.Context.MODE_PRIVATE);
-        pagesRead = ip.getInt("pages_read", 0);
-        cycle = Math.max(1, ip.getInt("cycle", 1));
+        if (SaveManager.getInt("ibliss:pages_read", -1) < 0) {
+            SaveManager.setInt("ibliss:pages_read", oldIbliss.getInt("pages_read", 0));
+            SaveManager.setInt("ibliss:cycle", oldIbliss.getInt("cycle", 1));
+        }
+        oldIbliss.edit().clear().apply();
+        pagesRead = SaveManager.getInt("ibliss:pages_read", 0);
+        cycle = Math.max(1, SaveManager.getInt("ibliss:cycle", 1));
         pagesInCycle = pagesRead % 42;
-        muteGapT = 0f; beatT = 0f;
-        blind = false; sweepT = -1f; sweepCd = 10f; slowT = 0f; victoryDone = false;
+        muteGapT = 0f; beatT = 0f; hitchT = 0f; nextHitch = 75; selfStunT = 0f;
+        blind = false; sweepT = -1f; sweepCd = 10f; victoryDone = false;
+        hasShili = SaveManager.getFlag("boon:world_hitch", false);
         bossHp = 100f - pagesRead;
         // 递枪演出完毕 → ibliss:delivered = true → 武器解锁持有（键名不可改）
-        ip.edit().putBoolean("has", true).putBoolean("delivered", true).apply();
+        SaveManager.setFlag("ibliss:has", true);
+        SaveManager.setFlag("ibliss:delivered", true);
+        SaveManager.setFlag("progress:sea_reached", true);
         if (pagesRead >= 100) {
             victoryDone = true;
             narrate("白海已经空了。祂不再供给。");
@@ -1260,21 +1370,14 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             if (muteGapT <= 0f) restoreSteps();
             return;
         }
-        float ts = (slowT > 0f) ? 0.3f : 1f;
-        if (slowT > 0f) slowT -= dt;
-        if (slowCd > 0f) slowCd -= dt;
+        // 世界漏一拍：怪物与光线减速 60%（玩家不受影响）
+        float ts = (hitchT > 0f) ? 0.4f : 1f;
+        if (hitchT > 0f) hitchT -= dt;
+        if (selfStunT > 0f) selfStunT -= dt;
         if (invulnT > 0f) invulnT -= dt;
         if (bossFlash > 0f) bossFlash -= dt * 2f;
 
-        if (blind) {
-            blindT -= dt;
-            if (blindT <= 0f) {
-                blind = false; invulnT = 2.5f;
-                px = 0f; pz = -24f;
-                narrate("视觉还给你。十秒，是祂的仁慈，也是警告。");
-            }
-            return;
-        }
+        if (blind) return;   // 黑屏倒计时由主循环 updateBlind 统一驱动（战前/战中共用）
 
         bossT += dt * ts;
         bossBob = (float) Math.sin(bossT * 0.8f) * 0.35f;
@@ -1285,9 +1388,21 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         gaze = 1f - clamp(bd / 30f, 0f, 1f);
 
         float pa = (float) Math.atan2(bx, bz);
-        for (int i = 0; i < 3; i++) {
-            float diff = normAng(pa - beamA[i]);
-            beamA[i] += clamp(diff, -0.30f * dt * ts, 0.30f * dt * ts) + 0.09f * dt * ts;
+        int remain = 100 - pagesRead;
+        float jit = pagesRead / 100f * 0.9f;   // 剩余段数越少，她的线越抖
+        if (selfStunT <= 0f) {
+            for (int i = 0; i < 3; i++) {
+                float diff = normAng(pa - beamA[i]);
+                beamA[i] += clamp(diff, -0.30f * dt * ts, 0.30f * dt * ts)
+                          + 0.09f * dt * ts
+                          + (float) Math.sin(bossT * (5f + i * 1.7f) + i * 2.1f) * jit * dt;
+            }
+            // 15-39 剩余：偶尔打到自己脚边；0-14：更频繁
+            float pSelf = (remain <= 14) ? dt * 0.5f : (remain <= 39 ? dt * 0.2f : 0f);
+            if (pSelf > 0f && Math.random() < pSelf) {
+                selfStunT = 1.5f; bossFlash = 1f;
+                narrate("光线扫到了她自己的脚边。她顿了一顿。");
+            }
         }
         sweepCd -= dt * ts;
         if (sweepT < 0f && sweepCd <= 0f) {
@@ -1302,7 +1417,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
                 narrate("「——而是每一次，你都以为是最后一次。」");
             }
         }
-        if (invulnT <= 0f) {
+        if (invulnT <= 0f && selfStunT <= 0f) {
             for (int i = 0; i < 3; i++) if (beamHit(bd, pa, beamA[i])) { onHit(); return; }
             if (sweepT >= 0f && beamHit(bd, pa, sweepA)) { onHit(); return; }
         }
@@ -1326,18 +1441,17 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         pagesInCycle++;
         bossHp = 100f - pagesRead;
         bossFlash = 1f;
-        ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
-                .putInt("pages_read", pagesRead).apply();
-        if (pagesRead % 25 == 0) {          // 每 25 段：世界漏一拍
-            beatT = 0.35f;
+        SaveManager.setInt("ibliss:pages_read", pagesRead);
+        if (pagesRead >= nextHitch) {       // 75/50/25：环境残余·世界漏一拍（自动，3s/60%）
+            nextHitch -= 25;
+            hitchT = 3f;
             narrate("世界，漏了一拍。");
         }
         if (pagesInCycle >= 42) {           // 一轮供给尽：静音 0.3s → 祂续下一份
             pagesInCycle = 0;
             cycle++;
             muteGapT = 0.3f;
-            ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
-                    .putInt("cycle", cycle).apply();
+            SaveManager.setInt("ibliss:cycle", cycle);
             narrate("祂把下一份，塞进了你手里。");
         }
         if (bossHp <= 0f) victory();
@@ -1382,9 +1496,14 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (victoryDone) return;
         victoryDone = true;
         hasShili = true;
-        ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
-                .putInt("pages_read", 100).apply();
-        narrate("海退了。你夺走了祂的一部分时间。");
+        SaveManager.setInt("ibliss:pages_read", 100);
+        SaveManager.setFlag("progress:sea_cleared", true);
+        SaveManager.setFlag("abyss:cleared", true);
+        SaveManager.setFlag("abyss:hallucination_triggered", true);
+        SaveManager.setLong("abyss:cleared_at", System.currentTimeMillis());
+        SaveManager.setFlag("boon:world_hitch", true);   // 跨副本永久：世界漏一拍
+        SaveManager.endCritical();
+        narrate("海退了。她把溅出来的那一拍，留给了你。");
         if (eventListener != null) eventListener.onBossDefeated();
     }
 

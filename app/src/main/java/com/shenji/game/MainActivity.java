@@ -31,7 +31,10 @@ public class MainActivity extends Activity {
     private TrialView trial;        // ★ 九酒之问 · 质询界面
     private NextRealmView next;     // ★ 猛地一闪 → 下一个神域
     private FrameLayout root;
-    private TextView narrateView, crosshair, fireBtn;
+    private TextView narrateView, crosshair, fireBtn, countdownView;
+    private View blackOverlay, flashView;
+    private FrameLayout bloodLayer;
+    private final android.os.Handler uiHandler = new android.os.Handler();
     private final Runnable narrateHide = new Runnable() {
         @Override
         public void run() {
@@ -41,6 +44,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        SaveManager.init(this);   // ★ 存档唯一入口（须在一切读档之前）
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
@@ -54,10 +58,6 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        // ★ 时力：跨副本永久能力（蒙尔斯洛斯通关奖励）
-        if (getSharedPreferences("shili", MODE_PRIVATE).getBoolean("owned", false)) {
-            gameView.setHasShili(true);
-        }
 
         // ★ 蒙尔斯洛斯：旁白 / 准星 / 开火键
         narrateView = new TextView(this);
@@ -70,6 +70,36 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         nlp.gravity = Gravity.CENTER;
         root.addView(narrateView, nlp);
+
+        // ★ 9秒黑屏：黑幕 + 白色等宽倒计时（docs/光线工程规则：白=她在数秒，不用红）
+        blackOverlay = new View(this);
+        blackOverlay.setBackgroundColor(0xFF000000);
+        blackOverlay.setVisibility(View.GONE);
+        root.addView(blackOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        countdownView = new TextView(this);
+        countdownView.setTextColor(0xFFFFFFFF);
+        countdownView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 64);
+        countdownView.setTypeface(android.graphics.Typeface.MONOSPACE);
+        countdownView.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams cdlp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        cdlp.gravity = Gravity.CENTER;
+        blackOverlay.setVisibility(View.GONE);
+        root.addView(countdownView, cdlp);
+
+        // ★ 白闪（血字转场用）
+        flashView = new View(this);
+        flashView.setBackgroundColor(0xFFFFFFFF);
+        flashView.setVisibility(View.GONE);
+        root.addView(flashView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        bloodLayer = new FrameLayout(this);
+        bloodLayer.setVisibility(View.GONE);
+        root.addView(bloodLayer, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         crosshair = new TextView(this);
         crosshair.setText("┼");
@@ -263,6 +293,37 @@ public class MainActivity extends Activity {
                 });
             }
             @Override
+            public void onBlindTick(final int secsLeft) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        blackOverlay.setVisibility(View.VISIBLE);
+                        countdownView.setText(String.valueOf(secsLeft));
+                        countdownView.bringToFront();
+                        countdownView.animate().cancel();
+                        countdownView.setScaleX(1.35f);
+                        countdownView.setScaleY(0.70f);
+                        countdownView.animate().scaleX(1f).scaleY(1f).setDuration(200).start();
+                        // 每秒屏幕边缘轻抖 1-2px：告诉玩家"还活着，这是设计"
+                        root.animate().cancel();
+                        root.setTranslationX(2f);
+                        root.animate().translationX(0f).setDuration(150).start();
+                    }
+                });
+            }
+
+            @Override
+            public void onBlindEnd(final boolean preBoss) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        blackOverlay.setVisibility(View.GONE);
+                        if (preBoss) playBloodText();
+                    }
+                });
+            }
+
+            @Override
             public void onBossDefeated() {
                 runOnUiThread(new Runnable() {
                     @Override
@@ -271,7 +332,7 @@ public class MainActivity extends Activity {
                                 .putBoolean("owned", true).apply();
                         crosshair.setVisibility(View.GONE);
                         fireBtn.setVisibility(View.GONE);
-                        showNarrate("「海退了。你夺走了祂的一部分时间。」\n—— 获得「时力」：长按开火，二十秒归你");
+                        showNarrate("「海退了。她把溅出来的那一拍，留给了你。」\n—— 获得「世界漏一拍」：跨副本永久");
                         root.postDelayed(new Runnable() {
                             @Override
                             public void run() {
@@ -341,6 +402,65 @@ public class MainActivity extends Activity {
             fireBtn.setVisibility(View.VISIBLE);
         }
         narrateView.postDelayed(narrateHide, 3600L);
+    }
+
+    /** ★ 血字砸屏（docs/血红字砸屏转场）：逐字 0.28s 砸上屏幕 → 全屏白闪 → 开战 */
+    private void playBloodText() {
+        bloodLayer.removeAllViews();
+        bloodLayer.setVisibility(View.VISIBLE);
+        bloodLayer.bringToFront();
+        final String text = "恭喜，你可以打BOSS了";
+        final float scale = getResources().getDisplayMetrics().density;
+        final int fs = (int) (54 * scale + 0.5f);
+        final int targetY = (int) (getResources().getDisplayMetrics().heightPixels * 0.54f) - fs;
+        for (int i = 0; i < text.length(); i++) {
+            final int idx = i;
+            uiHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    TextView tv = new TextView(MainActivity.this);
+                    tv.setText(String.valueOf(text.charAt(idx)));
+                    tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, fs);
+                    tv.setTextColor(0xFFD10A0C);            // 正红，无描边无渐变
+                    tv.setTypeface(null, android.graphics.Typeface.BOLD);
+                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT);
+                    lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                    tv.setTranslationX((float) (Math.random() * 180 - 90) * scale);
+                    tv.setTranslationY(-fs * 2f);
+                    bloodLayer.addView(tv, lp);
+                    tv.animate().translationY(targetY).setDuration(420L)
+                            .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                            .start();
+                    // 屏幕被"砸"得往里凹一下
+                    root.animate().cancel();
+                    root.setScaleX(1.012f);
+                    root.setScaleY(0.988f);
+                    root.animate().scaleX(1f).scaleY(1f).setDuration(160L).start();
+                }
+            }, i * 280L);
+        }
+        long total = text.length() * 280L + 420L + 550L;
+        uiHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                flashView.setVisibility(View.VISIBLE);
+                flashView.setAlpha(1f);
+                flashView.bringToFront();
+                flashView.animate().alpha(0f).setDuration(400L).start();
+                uiHandler.postDelayed(new Runnable() {
+                    @Override
+                    public void run() {
+                        flashView.setAlpha(1f);
+                        flashView.setVisibility(View.GONE);
+                        bloodLayer.setVisibility(View.GONE);
+                        bloodLayer.removeAllViews();
+                        gameView.startBossNow();
+                    }
+                }, 450L);
+            }
+        }, total);
     }
 
     private int dp(int v) {
