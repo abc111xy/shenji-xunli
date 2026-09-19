@@ -741,8 +741,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (blind) {
             sb.append("视觉被夺 · ").append((int) Math.ceil(blindT)).append("s 后归还\n");
         } else {
-            sb.append(reloadT > 0f ? "—— 祂把下一份塞进你手里 ——\n"
-                                   : "弹药  " + ammo + "/42" + (firing ? "  ·  开火" : "") + "\n");
+            sb.append(muteGapT > 0f ? "—— 祂在吸气 ——\n"
+                    : "供给中 · 第 " + cycle + " 轮 (" + pagesInCycle + "/42)" + (firing ? "  ·  在读" : "") + "\n");
             if (hasShili) {
                 sb.append(slowT > 0f ? "时力 · 余 " + (int) Math.ceil(slowT) + "s\n"
                       : (slowCd > 0f ? "时力 · 冷却 " + (int) Math.ceil(slowCd) + "s\n"
@@ -1141,8 +1141,13 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
     private boolean firing = false;
     private float fireAcc = 0f;
-    private int ammo = 42;
-    private float reloadT = 0f;
+    // ★ 文件型武器语义（见 docs/蒙尔斯洛斯副本.md 工程规格）：
+    //   读一段 = 打一枪；pages_read 0..100 为单一事实源（bossHp = 100 - pages_read）
+    private int pagesRead = 0;        // 存档键 ibliss:pages_read
+    private int pagesInCycle = 0;     // 本轮已读段数（一轮 42）
+    private int cycle = 1;            // 存档键 ibliss:cycle 供给轮次
+    private float muteGapT = 0f;      // 轮末世界静音 0.3s（祂吸气）
+    private float beatT = 0f;         // 世界漏一拍（每 25 段，冻结 0.35s）
     private boolean blind = false;
     private float blindT = 0f;
     private int deaths = 0;
@@ -1222,18 +1227,44 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         mode = MODE_BOSS;
         px = 0f; pz = -24f; yaw = 0f; pitch = 0f;
         bossHp = 100f; bossT = 0f; deaths = 0;
-        firing = false; fireAcc = 0f; ammo = 42; reloadT = 0f;
+        firing = false; fireAcc = 0f;
+        android.content.SharedPreferences ip = ctx.getSharedPreferences(
+                "ibliss", android.content.Context.MODE_PRIVATE);
+        pagesRead = ip.getInt("pages_read", 0);
+        cycle = Math.max(1, ip.getInt("cycle", 1));
+        pagesInCycle = pagesRead % 42;
+        muteGapT = 0f; beatT = 0f;
         blind = false; sweepT = -1f; sweepCd = 10f; slowT = 0f; victoryDone = false;
+        bossHp = 100f - pagesRead;
+        // 递枪演出完毕 → ibliss:delivered = true → 武器解锁持有（键名不可改）
+        ip.edit().putBoolean("has", true).putBoolean("delivered", true).apply();
+        if (pagesRead >= 100) {
+            victoryDone = true;
+            narrate("白海已经空了。祂不再供给。");
+            return;
+        }
         narrate("你连自己都留不住的时候——祂把枪塞进了你手里。");
     }
 
     private void updateBoss(float dt) {
+        if (victoryDone) return;
+        // ★ 世界漏一拍：全部运动冻结
+        if (beatT > 0f) { beatT -= dt; return; }
+        // ★ 轮末 0.3s 静音间隙（祂吸气），之后恢复声轨
+        if (muteGapT > 0f) {
+            muteGapT -= dt;
+            if (soundPool != null) {
+                if (stepStreamId != -1) soundPool.setVolume(stepStreamId, 0f, 0f);
+                if (breathStreamId != -1) soundPool.setVolume(breathStreamId, 0f, 0f);
+            }
+            if (muteGapT <= 0f) restoreSteps();
+            return;
+        }
         float ts = (slowT > 0f) ? 0.3f : 1f;
         if (slowT > 0f) slowT -= dt;
         if (slowCd > 0f) slowCd -= dt;
         if (invulnT > 0f) invulnT -= dt;
         if (bossFlash > 0f) bossFlash -= dt * 2f;
-        if (reloadT > 0f) reloadT -= dt;
 
         if (blind) {
             blindT -= dt;
@@ -1276,24 +1307,46 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             if (sweepT >= 0f && beamHit(bd, pa, sweepA)) { onHit(); return; }
         }
 
-        if (firing && reloadT <= 0f) {
+        if (firing) {
             fireAcc += dt;
             while (fireAcc >= 0.12f) {
                 fireAcc -= 0.12f;
-                ammo--;
-                if (shotHits()) {
-                    bossHp -= 1f; bossFlash = 1f;
-                    if (bossHp <= 0f) { victory(); return; }
-                }
-                if (ammo <= 0) {
-                    reloadT = 0.9f; ammo = 42;
-                    narrate("祂把下一份，塞进了你手里。");
-                    break;
-                }
+                // 打在祂身上：读一段，白掉一层；打在别处：什么都没有发生
+                if (shotHits()) onPageRead();
+                if (victoryDone) return;
             }
         } else {
             fireAcc = 0f;
         }
+    }
+
+    /** ★ 武器事件契约（TongbaiFile.OnPageRead）：BOSS 只监听此事件，不直读 pages_read */
+    private void onPageRead() {
+        pagesRead++;
+        pagesInCycle++;
+        bossHp = 100f - pagesRead;
+        bossFlash = 1f;
+        ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
+                .putInt("pages_read", pagesRead).apply();
+        if (pagesRead % 25 == 0) {          // 每 25 段：世界漏一拍
+            beatT = 0.35f;
+            narrate("世界，漏了一拍。");
+        }
+        if (pagesInCycle >= 42) {           // 一轮供给尽：静音 0.3s → 祂续下一份
+            pagesInCycle = 0;
+            cycle++;
+            muteGapT = 0.3f;
+            ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
+                    .putInt("cycle", cycle).apply();
+            narrate("祂把下一份，塞进了你手里。");
+        }
+        if (bossHp <= 0f) victory();
+    }
+
+    private void restoreSteps() {
+        if (soundPool == null) return;
+        if (stepStreamId != -1) soundPool.setVolume(stepStreamId, 0.6f, 0.6f);
+        if (breathStreamId != -1) soundPool.setVolume(breathStreamId, 0.3f, 0.3f);
     }
 
     private boolean shotHits() {
@@ -1329,6 +1382,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (victoryDone) return;
         victoryDone = true;
         hasShili = true;
+        ctx.getSharedPreferences("ibliss", android.content.Context.MODE_PRIVATE).edit()
+                .putInt("pages_read", 100).apply();
         narrate("海退了。你夺走了祂的一部分时间。");
         if (eventListener != null) eventListener.onBossDefeated();
     }
