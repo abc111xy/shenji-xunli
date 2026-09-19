@@ -476,7 +476,10 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         }
 
         hudTimer += dt;
-        if (mode != MODE_CORRIDOR && (mode != MODE_SEA || mode == MODE_BOSS) && hudTimer > 0.12f && hud != null) {
+        if (hud != null && mode == MODE_BOSS) {
+            hud.onHud(buildHud());          // BOSS 战每帧直推（血条/供给/漏一拍）
+            hudTimer = 0f;
+        } else if (mode != MODE_CORRIDOR && mode != MODE_SEA && hudTimer > 0.12f && hud != null) {
             hudTimer = 0f;
             hud.onHud(buildHud());
         }
@@ -1143,6 +1146,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private int ropeStep = -1;
     private int lastBlindSec = -1;
     private boolean preBossBlackout = false;
+    private boolean blindEndFired = false;   // 黑屏结束事件防重复
 
     private float bossHp = 100f;
     private float bossT = 0f;
@@ -1269,7 +1273,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
     /** ★ 9 秒黑屏（docs/光线工程规则）：白色倒计时，每秒 tick，音频不黑 */
     private void startBlackout(boolean preBoss) {
-        blind = true; blindT = 9f; lastBlindSec = -1;
+        blind = true; blindT = 9f; lastBlindSec = -1; blindEndFired = false;
         preBossBlackout = preBoss;
         SaveManager.beginCritical("darkness");
     }
@@ -1281,7 +1285,9 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             lastBlindSec = sec;
             if (eventListener != null) eventListener.onBlindTick(sec);
         }
+        if (blindEndFired) return;   // 结束事件只发一次（防红字/倒计时重复）
         if (blindT <= 0f) {
+            blindEndFired = true;
             blind = false;
             SaveManager.endCritical();
             if (preBossBlackout) {
@@ -1473,7 +1479,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         float dl = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
         if (dl > 42f) return false;
         float ca = (dx * fx + dy * fy + dz * fz) / Math.max(dl, 0.01f);
-        return ca > 0.9969f;
+        return ca > 0.985f;   // 移动端辅助命中角 ≈10°
     }
 
     private static float normAng(float a) {
@@ -1488,7 +1494,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void onHit() {
-        blind = true; blindT = 10f; deaths++;
+        if (blind) return;          // 黑屏中免疫重复命中（防倒计时重复触发）
+        blind = true; blindT = 9f; deaths++;
         narrate("光穿过了你。祂取走了你的视觉。");
     }
 

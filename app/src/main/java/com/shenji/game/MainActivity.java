@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private FrameLayout root;
     private TextView narrateView, crosshair, fireBtn, countdownView;
     private View blackOverlay, flashView;
+    private boolean bloodTextPlaying = false;
     private FrameLayout bloodLayer;
     private final android.os.Handler uiHandler = new android.os.Handler();
     private final Runnable narrateHide = new Runnable() {
@@ -135,11 +136,13 @@ public class MainActivity extends Activity {
             public boolean onTouch(View v, android.view.MotionEvent e) {
                 switch (e.getActionMasked()) {
                     case android.view.MotionEvent.ACTION_DOWN:
+                        v.setAlpha(0.55f);                 // ★ 按压反馈（开火感知）
                         h.postDelayed(shiliRun, 700L);
                         gameView.setFiring(true);
                         return true;
                     case android.view.MotionEvent.ACTION_UP:
                     case android.view.MotionEvent.ACTION_CANCEL:
+                        v.setAlpha(1f);
                         h.removeCallbacks(shiliRun);
                         gameView.setFiring(false);
                         return true;
@@ -150,6 +153,7 @@ public class MainActivity extends Activity {
 
         hud = new TextView(this);
         hud.setTextColor(Color.WHITE);
+        hud.setBackgroundColor(0x73000000);   // ★ 深色背板：白色之海上白字不可见的问题
         hud.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         hud.setPadding(46, 40, 46, 40);
         hud.setShadowLayer(5f, 0f, 0f, Color.BLACK);
@@ -406,6 +410,8 @@ public class MainActivity extends Activity {
 
     /** ★ 血字砸屏（docs/血红字砸屏转场）：逐字 0.28s 砸上屏幕 → 全屏白闪 → 开战 */
     private void playBloodText() {
+        if (bloodTextPlaying) return;      // ★ 防血字重复触发
+        bloodTextPlaying = true;
         bloodLayer.removeAllViews();
         bloodLayer.setVisibility(View.VISIBLE);
         bloodLayer.bringToFront();
@@ -456,6 +462,7 @@ public class MainActivity extends Activity {
                         flashView.setVisibility(View.GONE);
                         bloodLayer.setVisibility(View.GONE);
                         bloodLayer.removeAllViews();
+                        bloodTextPlaying = false;
                         gameView.startBossNow();
                     }
                 }, 450L);
