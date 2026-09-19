@@ -48,6 +48,16 @@ public class GameView extends GLSurfaceView {
         renderer.jump();
     }
 
+    /** ★ 蒙尔斯洛斯：旁白/通关监听器 */
+    public void setEventListener(GameRenderer.EventListener l) { renderer.setEventListener(l); }
+    /** ★ 时力持有状态（跨副本永久） */
+    public void setHasShili(boolean v) { renderer.setHasShili(v); }
+    public boolean getHasShili() { return renderer.getHasShili(); }
+    /** ★ 开火键按住状态 */
+    public void setFiring(boolean v) { renderer.setFiring(v); }
+    /** ★ 发动时力（长按开火键） */
+    public void activateShili() { renderer.activateShili(); }
+
     /** 觐见（走近并仰望神像）→ 触发九酒之问 */
     public void setSummonListener(GameRenderer.SummonListener l) {
         renderer.setSummonListener(l);

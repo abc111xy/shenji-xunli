@@ -31,6 +31,13 @@ public class MainActivity extends Activity {
     private TrialView trial;        // ★ 九酒之问 · 质询界面
     private NextRealmView next;     // ★ 猛地一闪 → 下一个神域
     private FrameLayout root;
+    private TextView narrateView, crosshair, fireBtn;
+    private final Runnable narrateHide = new Runnable() {
+        @Override
+        public void run() {
+            if (narrateView != null) narrateView.animate().alpha(0f).setDuration(900L).start();
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,6 +53,70 @@ public class MainActivity extends Activity {
         root.addView(gameView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
+
+        // ★ 时力：跨副本永久能力（蒙尔斯洛斯通关奖励）
+        if (getSharedPreferences("shili", MODE_PRIVATE).getBoolean("owned", false)) {
+            gameView.setHasShili(true);
+        }
+
+        // ★ 蒙尔斯洛斯：旁白 / 准星 / 开火键
+        narrateView = new TextView(this);
+        narrateView.setTextColor(0xFFE8EDF8);
+        narrateView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 19);
+        narrateView.setGravity(Gravity.CENTER);
+        narrateView.setPadding(90, 0, 90, 0);
+        narrateView.setAlpha(0f);
+        FrameLayout.LayoutParams nlp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        nlp.gravity = Gravity.CENTER;
+        root.addView(narrateView, nlp);
+
+        crosshair = new TextView(this);
+        crosshair.setText("┼");
+        crosshair.setTextColor(0x99FFFFFF);
+        crosshair.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
+        crosshair.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        clp.gravity = Gravity.CENTER;
+        crosshair.setVisibility(View.GONE);
+        root.addView(crosshair, clp);
+
+        fireBtn = new TextView(this);
+        fireBtn.setText("开火");
+        fireBtn.setTextColor(0xFFF0D9A8);
+        fireBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+        fireBtn.setGravity(Gravity.CENTER);
+        fireBtn.setBackgroundColor(0x44D9BE86);
+        FrameLayout.LayoutParams flp = new FrameLayout.LayoutParams(150, 150);
+        flp.gravity = Gravity.BOTTOM | Gravity.END;
+        flp.setMargins(0, 0, 60, 220);
+        fireBtn.setVisibility(View.GONE);
+        root.addView(fireBtn, flp);
+        fireBtn.setOnTouchListener(new View.OnTouchListener() {
+            private final android.os.Handler h = new android.os.Handler();
+            private final Runnable shiliRun = new Runnable() {
+                @Override
+                public void run() {
+                    gameView.activateShili();
+                }
+            };
+            @Override
+            public boolean onTouch(View v, android.view.MotionEvent e) {
+                switch (e.getActionMasked()) {
+                    case android.view.MotionEvent.ACTION_DOWN:
+                        h.postDelayed(shiliRun, 700L);
+                        gameView.setFiring(true);
+                        return true;
+                    case android.view.MotionEvent.ACTION_UP:
+                    case android.view.MotionEvent.ACTION_CANCEL:
+                        h.removeCallbacks(shiliRun);
+                        gameView.setFiring(false);
+                        return true;
+                }
+                return true;
+            }
+        });
 
         hud = new TextView(this);
         hud.setTextColor(Color.WHITE);
@@ -180,6 +251,38 @@ public class MainActivity extends Activity {
             }
         });
 
+        // ★ 蒙尔斯洛斯：旁白 / 通关（授予时力）
+        gameView.setEventListener(new GameRenderer.EventListener() {
+            @Override
+            public void onNarrate(final String text) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showNarrate(text);
+                    }
+                });
+            }
+            @Override
+            public void onBossDefeated() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        getSharedPreferences("shili", MODE_PRIVATE).edit()
+                                .putBoolean("owned", true).apply();
+                        crosshair.setVisibility(View.GONE);
+                        fireBtn.setVisibility(View.GONE);
+                        showNarrate("「海退了。你夺走了祂的一部分时间。」\n—— 获得「时力」：长按开火，二十秒归你");
+                        root.postDelayed(new Runnable() {
+                            @Override
+                            public void run() {
+                                gameView.enterTrialRoom();
+                            }
+                        }, 4200L);
+                    }
+                });
+            }
+        });
+
         // ★ 九酒之问 → 崩塌（答错）／九轮走完 → 坠入无界
         trial.setListener(new TrialView.Listener() {
             @Override
@@ -223,6 +326,21 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    /** ★ 幻境/战斗旁白：淡入 3.6s 淡出；授枪那一刻亮出准星与开火键 */
+    private void showNarrate(String text) {
+        if (narrateView == null) return;
+        narrateView.removeCallbacks(narrateHide);
+        narrateView.setText(text);
+        narrateView.animate().cancel();
+        narrateView.setAlpha(0f);
+        narrateView.animate().alpha(1f).setDuration(500L).start();
+        if (crosshair != null && crosshair.getVisibility() != View.VISIBLE && text.contains("枪")) {
+            crosshair.setVisibility(View.VISIBLE);
+            fireBtn.setVisibility(View.VISIBLE);
+        }
+        narrateView.postDelayed(narrateHide, 3600L);
     }
 
     private int dp(int v) {

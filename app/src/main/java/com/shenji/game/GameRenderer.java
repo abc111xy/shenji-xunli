@@ -83,6 +83,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     public static final int MODE_CORRIDOR = 1;   // 无界 · 纯白走廊
     public static final int MODE_COURT = 2;      // 审判场 · 圆形镜室（预览图那个）
     public static final int MODE_SEA = 3;        // 世界海 · 白色之海（蒙尔斯洛斯）
+    public static final int MODE_BOSS = 4;       // ★ 蒙尔斯洛斯：时间海本体战
     private int mode = MODE_TRIAL;
     private final List<Obj> eyeObjs = new ArrayList<Obj>();   // 神像双眼（自发光，含镜中倒影）
     private boolean frozen = false;              // 质询中：锁移动与转视角
@@ -387,6 +388,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
             GLES20.glUniform1f(shader.uFogNear, 2.0f);
             GLES20.glUniform1f(shader.uFogFar, 30f);
+            if (mode == MODE_BOSS) drawBossWorld();
             for (int i = 0; i < objs.size(); i++) drawObj(objs.get(i));
             return;
         }
@@ -415,12 +417,27 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         shader.use();
         GLES20.glUniform3f(shader.uLightDir, 0.3f, 0.92f, 0.4f);
         if (mode == MODE_SEA) {
-            // 世界海 · 白色之海：无岸、无天、无地平线。乳白过曝的海面一直漫进远处的雾里
+            // 世界海 · 白色之海（★ 剥夺中逐渐白化封死）
+            float wk = depriveActive ? clamp(depriveT / 24f, 0f, 1f) : 0f;
             GLES20.glUniform3f(shader.uLightDir, 0.10f, 0.98f, 0.14f);
-            GLES20.glUniform3f(shader.uAmbient, 0.72f, 0.72f, 0.76f);
+            GLES20.glUniform3f(shader.uAmbient, 0.72f + 0.28f * wk, 0.72f + 0.28f * wk, 0.76f + 0.24f * wk);
             GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
-            GLES20.glUniform1f(shader.uFogNear, 12f);
-            GLES20.glUniform1f(shader.uFogFar, 64f);
+            GLES20.glUniform1f(shader.uFogNear, 12f - 10f * wk);
+            GLES20.glUniform1f(shader.uFogFar, 64f - 58f * wk);
+        } else if (mode == MODE_BOSS) {
+            // ★ 时间海本体战：月银雾
+            GLES20.glUniform3f(shader.uLightDir, 0.10f, 0.98f, 0.14f);
+            GLES20.glUniform3f(shader.uAmbient, 0.34f, 0.37f, 0.50f);
+            GLES20.glUniform3f(shader.uFogColor, 0.55f, 0.60f, 0.78f);
+            GLES20.glUniform1f(shader.uFogNear, 6f);
+            GLES20.glUniform1f(shader.uFogFar, 55f);
+            if (blind) {
+                // 视觉被夺：纯黑 + 倒计时
+                GLES20.glClearColor(0f, 0f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
+                if (hud != null) hud.onHud("视觉被夺 · " + (int) Math.ceil(blindT) + "s 后归还");
+                return;
+            }
         } else if (collapseT >= 0f) {
             // 崩塌：边界被抹除的那一刻，庭中血色浓起来，尽头只剩一片暗红
             GLES20.glUniform3f(shader.uAmbient, 0.50f, 0.055f, 0.065f);
@@ -447,7 +464,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         }
 
         hudTimer += dt;
-        if (mode != MODE_CORRIDOR && mode != MODE_SEA && hudTimer > 0.12f && hud != null) {
+        if (mode != MODE_CORRIDOR && (mode != MODE_SEA || mode == MODE_BOSS) && hudTimer > 0.12f && hud != null) {
             hudTimer = 0f;
             hud.onHud(buildHud());
         }
@@ -514,7 +531,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
         // ---- 世界海 · 白色之海：自由走动，走向雾中的蒙尔斯洛斯 ----
         //   这一境属于「听觉」—— 脚下的海不发声，只剩自己的呼吸
-        if (mode == MODE_SEA) {
+        if (mode == MODE_SEA || mode == MODE_BOSS) {
             seaT += dt;
             float rad = (float) Math.toRadians(yaw);
             float fwdX = (float) Math.sin(rad), fwdZ = (float) -Math.cos(rad);
@@ -542,10 +559,12 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             }
 
             // ★ 走到祂脚下 → 交回 MainActivity 收尾（A：弹「第二位神域」字卡）
-            if (!seaArrived && pz <= SEA_ARRIVE_Z) {
+            if (mode == MODE_SEA && !seaArrived && pz <= SEA_ARRIVE_Z) {
                 seaArrived = true;
-                if (seaListener != null) seaListener.onSeaArrived();
+                startDeprive();          // ★ 蒙尔斯洛斯：靠近本体 → 幻境剥夺
             }
+            if (mode == MODE_BOSS) updateBoss(dt);
+            if (depriveActive) updateDeprive(dt);
             return;
         }
 
@@ -692,6 +711,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private String buildHud() {
+        if (mode == MODE_BOSS) return bossHud();
         StringBuilder sb = new StringBuilder();
         sb.append("神寂·巡礼  ·  伊赛德亚 — 边界与谎言之庭\n");
         sb.append("注视值  ").append(bar(gaze)).append("  ").append((int) (gaze * 100)).append("%\n");
@@ -708,6 +728,27 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             sb.append("状态：你正仰望着祂。");
         } else {
             sb.append("状态：庭中无声。走近祂。");
+        }
+        return sb.toString();
+    }
+
+    /** ★ 蒙尔斯洛斯本体战 HUD */
+    private String bossHud() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("白色之海 · 蒙尔斯洛斯 — 时间之神\n");
+        sb.append("白 ").append(bar(clamp(bossHp / 100f, 0f, 1f))).append("  ")
+          .append((int) Math.ceil(bossHp)).append("/100\n");
+        if (blind) {
+            sb.append("视觉被夺 · ").append((int) Math.ceil(blindT)).append("s 后归还\n");
+        } else {
+            sb.append(reloadT > 0f ? "—— 祂把下一份塞进你手里 ——\n"
+                                   : "弹药  " + ammo + "/42" + (firing ? "  ·  开火" : "") + "\n");
+            if (hasShili) {
+                sb.append(slowT > 0f ? "时力 · 余 " + (int) Math.ceil(slowT) + "s\n"
+                      : (slowCd > 0f ? "时力 · 冷却 " + (int) Math.ceil(slowCd) + "s\n"
+                                     : "时力 · 就绪（长按开火）\n"));
+            }
+            if (deaths > 0) sb.append("你被光穿过 ").append(deaths).append(" 次\n");
         }
         return sb.toString();
     }
@@ -1074,6 +1115,287 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             return 0;
         }
         return tex[0];
+    }
+
+
+    // ================================================================
+    //  ★ 蒙尔斯洛斯（时间之神）—— 幻境剥夺 + 白色之海本体战
+    //  武器：空白·伊莉尔斯（第一代主人造，第二代主人——你——使用）
+    // ================================================================
+    private static final float BOSS_X = 0f, BOSS_Z = -42f, BOSS_Y = 4.2f;
+
+    private boolean depriveActive = false;
+    private float depriveT = 0f;
+    private int depriveStep = -1;
+
+    private float bossHp = 100f;
+    private float bossT = 0f;
+    private float bossFlash = 0f;
+    private float bossBob = 0f;
+    private boolean victoryDone = false;
+
+    private final float[] beamA = { 0.4f, 2.5f, 4.6f };
+    private float sweepT = -1f;
+    private float sweepA = 0f;
+    private float sweepCd = 8f;
+
+    private boolean firing = false;
+    private float fireAcc = 0f;
+    private int ammo = 42;
+    private float reloadT = 0f;
+    private boolean blind = false;
+    private float blindT = 0f;
+    private int deaths = 0;
+    private float invulnT = 0f;
+
+    private boolean hasShili = false;
+    private float slowT = 0f, slowCd = 0f;
+
+    private Mesh mBossRobe, mBossTorso, mBossHead, mBossArm, mBossHalo, mBeam;
+    private boolean bossMeshesOk = false;
+
+    public interface EventListener {
+        void onNarrate(String text);
+        void onBossDefeated();
+    }
+    private EventListener eventListener;
+    public void setEventListener(EventListener l) { eventListener = l; }
+    public void setHasShili(boolean v) { hasShili = v; }
+    public boolean getHasShili() { return hasShili; }
+    public void setFiring(boolean v) { firing = v; }
+
+    /** ★ 时力：二十秒的时间归你支配（长按开火键发动） */
+    public void activateShili() {
+        if (!hasShili || mode != MODE_BOSS || slowT > 0f || slowCd > 0f) return;
+        slowT = 20f; slowCd = 45f;
+        narrate("时力——二十秒的时间，归你支配。");
+    }
+
+    private static final String[] DEPRIVE_LINES = {
+        "你失去了方位。", "声音退场。寂静是最先到达的。", "气味的记忆，散了。",
+        "白色漫上来。你看不见了。", "你再也摸不到自己。", "冷与热，一起作废。",
+        "重量是一种谎言。", "你在动吗？你无从知晓。", "深在上，浅在下。深浅颠倒。",
+        "连受罚的实感，也被没收。", "与世界最后的交换，归于平淡。", "恐惧退去。空洞得清醒。",
+        "过去的你，脱落了。", "「我」——正在崩解。", "你成了空白之人。成了绳索。" };
+
+    private void narrate(String s) {
+        if (eventListener != null) eventListener.onNarrate(s);
+    }
+
+    private void startDeprive() {
+        depriveActive = true; depriveT = 0f; depriveStep = -1;
+        narrate("「凡人，请你领教海洋的魅力。」");
+    }
+
+    private void updateDeprive(float dt) {
+        depriveT += dt;
+        int step = (int) (depriveT / 1.9f);
+        if (step > 14) step = 14;
+        if (step != depriveStep) {
+            depriveStep = step;
+            narrate(DEPRIVE_LINES[step]);
+            if (soundPool != null) {
+                float k = 1f - step / 15f;
+                if (stepStreamId != -1) soundPool.setVolume(stepStreamId, 0.6f * k, 0.6f * k);
+                if (breathStreamId != -1) soundPool.setVolume(breathStreamId, 0.3f * k, 0.3f * k);
+            }
+        }
+        if (depriveT >= 14f * 1.9f + 2.5f) {
+            depriveActive = false;
+            enterBoss();
+        }
+    }
+
+    private void ensureBossMeshes() {
+        if (bossMeshesOk) return;
+        mBossRobe  = MeshBuilder.sphere(16, 12);
+        mBossTorso = MeshBuilder.box();
+        mBossHead  = MeshBuilder.sphere(14, 10);
+        mBossArm   = MeshBuilder.box();
+        mBossHalo  = MeshBuilder.ring(0.95f, -0.06f, 0.06f, 48);
+        mBeam      = MeshBuilder.box();
+        bossMeshesOk = true;
+    }
+
+    private void enterBoss() {
+        ensureBossMeshes();
+        mode = MODE_BOSS;
+        px = 0f; pz = -24f; yaw = 0f; pitch = 0f;
+        bossHp = 100f; bossT = 0f; deaths = 0;
+        firing = false; fireAcc = 0f; ammo = 42; reloadT = 0f;
+        blind = false; sweepT = -1f; sweepCd = 10f; slowT = 0f; victoryDone = false;
+        narrate("你连自己都留不住的时候——祂把枪塞进了你手里。");
+    }
+
+    private void updateBoss(float dt) {
+        float ts = (slowT > 0f) ? 0.3f : 1f;
+        if (slowT > 0f) slowT -= dt;
+        if (slowCd > 0f) slowCd -= dt;
+        if (invulnT > 0f) invulnT -= dt;
+        if (bossFlash > 0f) bossFlash -= dt * 2f;
+        if (reloadT > 0f) reloadT -= dt;
+
+        if (blind) {
+            blindT -= dt;
+            if (blindT <= 0f) {
+                blind = false; invulnT = 2.5f;
+                px = 0f; pz = -24f;
+                narrate("视觉还给你。十秒，是祂的仁慈，也是警告。");
+            }
+            return;
+        }
+
+        bossT += dt * ts;
+        bossBob = (float) Math.sin(bossT * 0.8f) * 0.35f;
+
+        float bx = px - BOSS_X, bz = pz - BOSS_Z;
+        float bd = (float) Math.sqrt(bx * bx + bz * bz);
+        if (bd > 15f) { px = BOSS_X + bx / bd * 15f; pz = BOSS_Z + bz / bd * 15f; }
+        gaze = 1f - clamp(bd / 30f, 0f, 1f);
+
+        float pa = (float) Math.atan2(bx, bz);
+        for (int i = 0; i < 3; i++) {
+            float diff = normAng(pa - beamA[i]);
+            beamA[i] += clamp(diff, -0.30f * dt * ts, 0.30f * dt * ts) + 0.09f * dt * ts;
+        }
+        sweepCd -= dt * ts;
+        if (sweepT < 0f && sweepCd <= 0f) {
+            sweepT = 0f; sweepA = pa + 2.4f;
+            narrate("「最残酷的不是永远爬不到——」");
+        }
+        if (sweepT >= 0f) {
+            sweepT += dt * ts;
+            sweepA += 1.30f * dt * ts;
+            if (sweepT > 4.5f) {
+                sweepT = -1f; sweepCd = 12f;
+                narrate("「——而是每一次，你都以为是最后一次。」");
+            }
+        }
+        if (invulnT <= 0f) {
+            for (int i = 0; i < 3; i++) if (beamHit(bd, pa, beamA[i])) { onHit(); return; }
+            if (sweepT >= 0f && beamHit(bd, pa, sweepA)) { onHit(); return; }
+        }
+
+        if (firing && reloadT <= 0f) {
+            fireAcc += dt;
+            while (fireAcc >= 0.12f) {
+                fireAcc -= 0.12f;
+                ammo--;
+                if (shotHits()) {
+                    bossHp -= 1f; bossFlash = 1f;
+                    if (bossHp <= 0f) { victory(); return; }
+                }
+                if (ammo <= 0) {
+                    reloadT = 0.9f; ammo = 42;
+                    narrate("祂把下一份，塞进了你手里。");
+                    break;
+                }
+            }
+        } else {
+            fireAcc = 0f;
+        }
+    }
+
+    private boolean shotHits() {
+        float rad = (float) Math.toRadians(yaw);
+        float rp  = (float) Math.toRadians(pitch);
+        float fx = (float) (Math.sin(rad) * Math.cos(rp));
+        float fy = (float) (Math.sin(rp));
+        float fz = (float) (-Math.cos(rad) * Math.cos(rp));
+        float dx = BOSS_X - px, dy = (BOSS_Y + bossBob) - (1.46f + py), dz = BOSS_Z - pz;
+        float dl = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dl > 42f) return false;
+        float ca = (dx * fx + dy * fy + dz * fz) / Math.max(dl, 0.01f);
+        return ca > 0.9969f;
+    }
+
+    private static float normAng(float a) {
+        while (a > Math.PI) a -= 2f * (float) Math.PI;
+        while (a < -Math.PI) a += 2f * (float) Math.PI;
+        return a;
+    }
+
+    private boolean beamHit(float bd, float pa, float a) {
+        if (bd < 2.5f || bd > 26f) return false;
+        return Math.abs(normAng(pa - a)) < 0.055f;
+    }
+
+    private void onHit() {
+        blind = true; blindT = 10f; deaths++;
+        narrate("光穿过了你。祂取走了你的视觉。");
+    }
+
+    private void victory() {
+        if (victoryDone) return;
+        victoryDone = true;
+        hasShili = true;
+        narrate("海退了。你夺走了祂的一部分时间。");
+        if (eventListener != null) eventListener.onBossDefeated();
+    }
+
+    private void drawBossWorld() {
+        float by = BOSS_Y + bossBob;
+        float white = clamp(bossHp / 100f, 0f, 1f);
+        float glow = (0.20f + 0.80f * white) + bossFlash;
+
+        Obj o;
+        o = new Obj(); o.mesh = mBossRobe;
+        o.x = BOSS_X; o.y = by - 2.7f; o.z = BOSS_Z;
+        o.sx = 1.55f; o.sy = 2.7f; o.sz = 1.55f;
+        o.tr = 0.90f; o.tg = 0.92f; o.tb = 1.0f; o.emissive = glow * 0.8f;
+        drawObj(o);
+
+        o = new Obj(); o.mesh = mBossTorso;
+        o.x = BOSS_X; o.y = by - 0.8f; o.z = BOSS_Z;
+        o.sx = 0.9f; o.sy = 1.5f; o.sz = 0.5f;
+        o.tr = 0.88f; o.tg = 0.90f; o.tb = 0.98f; o.emissive = glow * 0.7f;
+        drawObj(o);
+
+        o = new Obj(); o.mesh = mBossHead;
+        o.x = BOSS_X; o.y = by + 0.75f; o.z = BOSS_Z;
+        o.sx = 0.38f; o.sy = 0.42f; o.sz = 0.38f;
+        o.tr = 0.95f; o.tg = 0.96f; o.tb = 1.0f; o.emissive = glow;
+        drawObj(o);
+
+        o = new Obj(); o.mesh = mBossArm;
+        o.x = BOSS_X - 0.85f; o.y = by - 1.1f; o.z = BOSS_Z;
+        o.sx = 0.15f; o.sy = 1.6f; o.sz = 0.15f; o.rotY = -8f;
+        o.tr = 0.85f; o.tg = 0.88f; o.tb = 0.97f; o.emissive = glow * 0.6f;
+        drawObj(o);
+
+        o = new Obj(); o.mesh = mBossArm;
+        o.x = BOSS_X + 0.85f; o.y = by - 1.1f; o.z = BOSS_Z;
+        o.sx = 0.15f; o.sy = 1.6f; o.sz = 0.15f; o.rotY = 8f;
+        o.tr = 0.85f; o.tg = 0.88f; o.tb = 0.97f; o.emissive = glow * 0.6f;
+        drawObj(o);
+
+        o = new Obj(); o.mesh = mBossHalo;
+        o.x = BOSS_X; o.y = by + 1.05f; o.z = BOSS_Z + 0.12f;
+        o.rotX = 90f;
+        o.tr = 1.0f; o.tg = 0.90f; o.tb = 0.62f; o.emissive = 0.9f + bossFlash;
+        drawObj(o);
+
+        for (int i = 0; i < 3; i++) {
+            o = new Obj(); o.mesh = mBeam;
+            float a = beamA[i];
+            o.x = BOSS_X + (float) Math.sin(a) * 13f;
+            o.y = by;
+            o.z = BOSS_Z + (float) Math.cos(a) * 13f;
+            o.rotY = (float) Math.toDegrees(a);
+            o.sx = 0.16f; o.sy = 0.16f; o.sz = 26f;
+            o.tr = 1.0f; o.tg = 0.96f; o.tb = 0.85f; o.emissive = 1.2f;
+            drawObj(o);
+        }
+        if (sweepT >= 0f) {
+            o = new Obj(); o.mesh = mBeam;
+            o.x = BOSS_X + (float) Math.sin(sweepA) * 13f;
+            o.y = by;
+            o.z = BOSS_Z + (float) Math.cos(sweepA) * 13f;
+            o.rotY = (float) Math.toDegrees(sweepA);
+            o.sx = 0.5f; o.sy = 0.5f; o.sz = 26f;
+            o.tr = 1.0f; o.tg = 0.55f; o.tb = 0.45f; o.emissive = 1.4f;
+            drawObj(o);
+        }
     }
 
     private static class Obj {
