@@ -8,10 +8,16 @@ import android.graphics.Typeface;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.animation.AlphaAnimation;
+import android.content.res.AssetFileDescriptor;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
+import android.media.MediaPlayer;
 import android.view.animation.Animation;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -44,13 +50,54 @@ public class SplashScreen extends FrameLayout {
     private View barFill;
     private TextView startText;
     private int barFullW;
+    private MediaPlayer splashPlayer;   // 启动页背景视频
 
     public SplashScreen(Context c) {
         super(c);
         setBackgroundColor(Color.BLACK);
         setClickable(true);
 
-        // ---- 背景海报 ----
+        // ---- 背景视频：agnes_keyframe_hair_5s 循环（失败回退静态海报）----
+        final TextureView video = new TextureView(c);
+        video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) {
+                try {
+                    splashPlayer = new MediaPlayer();
+                    AssetFileDescriptor afd = c.getAssets().openFd("splash_bg.mp4");
+                    splashPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                    afd.close();
+                    splashPlayer.setLooping(true);
+                    splashPlayer.setVolume(0f, 0f);   // 无声循环
+                    splashPlayer.setSurface(new Surface(st));
+                    splashPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                        @Override
+                        public void onPrepared(MediaPlayer mp) {
+                            mp.start();
+                            int vw = mp.getVideoWidth(), vh = mp.getVideoHeight();
+                            if (vw > 0 && vh > 0 && video.getWidth() > 0) {
+                                float scale = Math.max(
+                                        (float) video.getWidth() / vw,
+                                        (float) video.getHeight() / vh);
+                                Matrix m = new Matrix();
+                                m.setScale(scale, scale,
+                                        video.getWidth() / 2f, video.getHeight() / 2f);
+                                video.setTransform(m);
+                            }
+                        }
+                    });
+                    splashPlayer.prepareAsync();
+                } catch (Exception e) {
+                    video.setVisibility(GONE);   // 任何异常 → 回退海报
+                }
+            }
+            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) {}
+            @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) { return true; }
+            @Override public void onSurfaceTextureUpdated(SurfaceTexture st) {}
+        });
+        addView(video, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+
+        // ---- 背景海报（视频兜底）----
         ImageView bg = new ImageView(c);
         Bitmap bm = loadBg(c);
         if (bm != null) {
@@ -209,6 +256,16 @@ public class SplashScreen extends FrameLayout {
 
     private int dp(Context c, float v) {
         return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        if (splashPlayer != null) {
+            try { splashPlayer.stop(); } catch (Exception ignored) {}
+            try { splashPlayer.release(); } catch (Exception ignored) {}
+            splashPlayer = null;
+        }
     }
 
     private static Bitmap loadBg(Context c) {
