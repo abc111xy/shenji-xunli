@@ -24,7 +24,9 @@ public class GameView extends GLSurfaceView {
         setEGLContextClientVersion(2);
         renderer = new GameRenderer(context);
         setRenderer(renderer);
-        setRenderMode(RENDERMODE_CONTINUOUSLY);
+        // ★#2 发热修复：WHEN_DIRTY + 心跳驱动（默认30fps），静止时GPU零占空
+        setRenderMode(RENDERMODE_WHEN_DIRTY);
+        hb.postDelayed(beat, 33L);
         // 切后台时尽量保留 EGL 上下文，减少 onSurfaceCreated 重建；
         // 即便不保留，buildScene() 已做幂等处理，不会重复叠加模型。
         setPreserveEGLContextOnPause(true);
@@ -32,6 +34,23 @@ public class GameView extends GLSurfaceView {
 
     public void setHudListener(HudListener l) {
         renderer.setHudListener(l);
+    }
+
+    // ★#2 心跳：按目标帧率驱动 requestRender
+    private final android.os.Handler hb = new android.os.Handler(android.os.Looper.getMainLooper());
+    private int fpsTarget = 30;
+    private final Runnable beat = new Runnable() {
+        @Override
+        public void run() {
+            requestRender();
+            hb.postDelayed(this, 1000L / Math.max(15, fpsTarget));
+        }
+    };
+
+    /** ★#10 画质档位：渲染比例 + 目标帧率 */
+    public void setQuality(float renderScale, int fps) {
+        renderer.setRenderScale(renderScale);
+        fpsTarget = Math.max(15, Math.min(60, fps));
     }
 
     /** 渲染加载进度 → 启动页进度条 */

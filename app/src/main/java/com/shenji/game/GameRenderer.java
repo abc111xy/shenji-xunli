@@ -240,6 +240,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     private int stepStreamId = -1;
     private int breathSoundId = -1;
     private int breathStreamId = -1;
+    private int shotSoundId = -1, jumpSoundId = -1;
+    private int bgmSoundId = -1, bgmStreamId = -1;
 
     // 模型缩放与落位（模型高 0.89 单位 → 约 11 米）
     private static final float DEITY_SCALE = 12f;
@@ -286,7 +288,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (frozen) return;
         yaw += dx * 0.22f;
         pitch -= dy * 0.22f;
-        pitch = clamp(pitch, -55f, 55f);
+        pitch = clamp(pitch, -85f, 85f);   // ★#7 放宽俯仰限制：天空与脚底可见
     }
 
     public void jump() {
@@ -294,6 +296,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (grounded) {
             vy = JUMP_V;
             grounded = false;
+            if (soundPool != null && jumpSoundId > 0) soundPool.play(jumpSoundId, 0.6f, 0.6f, 1, 0, 1f);
         }
     }
 
@@ -337,9 +340,16 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceChanged(GL10 gl, int w, int h) {
-        GLES20.glViewport(0, 0, w, h);
+        viewW = w; viewH = h;
         float ratio = (float) w / (float) Math.max(1, h);
-        Matrix.perspectiveM(proj, 0, 62f, ratio, 0.1f, 400f);
+        lastRatio = ratio;
+        Matrix.perspectiveM(proj, 0, lastFov, ratio, 0.1f, 400f);
+        projDirty = false;
+    }
+
+    /** ★#10 画质：渲染分辨率比例（0.6~1.0），流畅档降载发热 */
+    public void setRenderScale(float s) {
+        renderScale = clamp(s, 0.6f, 1.0f);
     }
 
     @Override
@@ -349,6 +359,13 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         lastTime = now;
 
         update(dt);
+
+        // ★#26 FOV 即改即生效；★#10 渲染比例视口
+        if (projDirty && viewW > 0f) {
+            Matrix.perspectiveM(proj, 0, lastFov, lastRatio, 0.1f, 400f);
+            projDirty = false;
+        }
+        GLES20.glViewport(0, 0, (int) (viewW * renderScale), (int) (viewH * renderScale));
 
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
 
@@ -388,7 +405,10 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             GLES20.glUniform3f(shader.uFogColor, 1f, 1f, 1f);
             GLES20.glUniform1f(shader.uFogNear, 2.0f);
             GLES20.glUniform1f(shader.uFogFar, 30f);
-            if (mode == MODE_BOSS) drawBossWorld();
+            if (mode == MODE_BOSS) {
+                drawBossWorld();
+                if (!blind) drawGunViewmodel();   // ★#8 手持空白·伊莉尔斯
+            }
             if (abyssActive && actStage == 2) drawAbyssRope();
             for (int i = 0; i < objs.size(); i++) drawObj(objs.get(i));
             return;
@@ -745,6 +765,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         } else {
             sb.append("状态：庭中无声。走近祂。");
         }
+        // ★#9 目标提示
+        if (!summoned) sb.append("目标：走进长廊尽头，抬头仰望祂");
         return sb.toString();
     }
 
@@ -1070,6 +1092,17 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         if (breathSoundId > 0) {
             breathStreamId = soundPool.play(breathSoundId, 0.30f, 0.30f, 1, -1, 1f);
         }
+        // ★#1 合成音效：枪声 / 跳跃 / BGM 氛围垫
+        try {
+            shotSoundId  = soundPool.load(ctx.getAssets().openFd("audio/shot.wav"), 1);
+            jumpSoundId  = soundPool.load(ctx.getAssets().openFd("audio/jump.wav"), 1);
+            bgmSoundId   = soundPool.load(ctx.getAssets().openFd("audio/bgm.wav"), 1);
+        } catch (Exception e) {
+            shotSoundId = jumpSoundId = bgmSoundId = -1;
+        }
+        if (bgmSoundId > 0) {
+            bgmStreamId = soundPool.play(bgmSoundId, 0.22f, 0.22f, 0, -1, 1f);
+        }
     }
 
     /** 读取 SJM1 二进制网格 */
@@ -1198,6 +1231,12 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     public void setHasShili(boolean v) { hasShili = v; }
     public boolean getHasShili() { return hasShili; }
     public void setFiring(boolean v) { firing = v; }
+
+    /** ★#26 设置里的 FOV 立即生效（每帧检查变化） */
+    public void setLiveFov(float fov) {
+        float f = clamp(fov, 55f, 85f);
+        if (Math.abs(f - lastFov) > 0.01f) { lastFov = f; projDirty = true; }
+    }
 
     /** ★ 环境残余：玩家不可主动发动（docs/环境残余时力规格）。
      *  玩家不是拥有时力，只是站在她溅出来的那一拍里。 */
@@ -1362,6 +1401,12 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         narrate("你连自己都留不住的时候——祂把枪塞进了你手里。");
     }
 
+    private float lastFov = 62f;       // ★#26 当前生效 FOV
+    private float lastRatio = 1f;
+    private boolean projDirty = false; // FOV 变化即重算投影
+    private float renderScale = 1f, viewW = 0f, viewH = 0f;
+    private float recoilT = 0f;        // 开火后坐
+
     private void updateBoss(float dt) {
         if (victoryDone) return;
         // ★ 世界漏一拍：全部运动冻结
@@ -1380,6 +1425,7 @@ public class GameRenderer implements GLSurfaceView.Renderer {
         float ts = (hitchT > 0f) ? 0.4f : 1f;
         if (hitchT > 0f) hitchT -= dt;
         if (selfStunT > 0f) selfStunT -= dt;
+        if (recoilT > 0f) recoilT -= dt * 7f;
         if (invulnT > 0f) invulnT -= dt;
         if (bossFlash > 0f) bossFlash -= dt * 2f;
 
@@ -1432,6 +1478,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
             fireAcc += dt;
             while (fireAcc >= 0.12f) {
                 fireAcc -= 0.12f;
+                if (soundPool != null && shotSoundId > 0) soundPool.play(shotSoundId, 0.5f, 0.5f, 1, 0, 1f);
+                recoilT = 1f;   // ★#4/#8 后坐反馈
                 // 打在祂身上：读一段，白掉一层；打在别处：什么都没有发生
                 if (shotHits()) onPageRead();
                 if (victoryDone) return;
@@ -1470,16 +1518,51 @@ public class GameRenderer implements GLSurfaceView.Renderer {
     }
 
     private boolean shotHits() {
+        float eyeY = 1.46f + py;
+        float dx = BOSS_X - px, dz = BOSS_Z - pz;
+        float dh = (float) Math.sqrt(dx * dx + dz * dz);
+        if (dh > 42f) return false;
+        // ★#4：瞄她身体圆柱（y∈[1.2,5.8]）的最近点——瞄身子任意部位都算命中
+        float ty = clamp(eyeY, 1.2f, 5.8f) - eyeY;
         float rad = (float) Math.toRadians(yaw);
         float rp  = (float) Math.toRadians(pitch);
         float fx = (float) (Math.sin(rad) * Math.cos(rp));
         float fy = (float) (Math.sin(rp));
         float fz = (float) (-Math.cos(rad) * Math.cos(rp));
-        float dx = BOSS_X - px, dy = (BOSS_Y + bossBob) - (1.46f + py), dz = BOSS_Z - pz;
-        float dl = (float) Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (dl > 42f) return false;
-        float ca = (dx * fx + dy * fy + dz * fz) / Math.max(dl, 0.01f);
-        return ca > 0.985f;   // 移动端辅助命中角 ≈10°
+        float dl = (float) Math.sqrt(dx * dx + ty * ty + dz * dz);
+        float ca = (dx * fx + ty * fy + dz * fz) / Math.max(dl, 0.01f);
+        return ca > 0.986f;
+    }
+
+    /** ★#8 第一人称枪模 viewmodel：空白·伊莉尔斯（程序几何体） */
+    private void drawGunViewmodel() {
+        float rad = (float) Math.toRadians(yaw);
+        float rp  = (float) Math.toRadians(pitch);
+        float fx = (float) (Math.sin(rad) * Math.cos(rp));
+        float fy = (float) (Math.sin(rp));
+        float fz = (float) (-Math.cos(rad) * Math.cos(rp));
+        float rx = (float) Math.cos(rad), rz = (float) Math.sin(rad);
+        float kick = recoilT > 0f ? recoilT * 0.14f : 0f;
+        float gx = px + fx * (0.55f - kick) + rx * 0.27f;
+        float gy = 1.46f + py + fy * (0.55f - kick) - 0.20f;
+        float gz = pz + fz * (0.55f - kick) + rz * 0.27f;
+        float rotY = (float) Math.toDegrees(rad) + 90f;
+        float rotX = -(float) Math.toDegrees(rp);
+        Obj o;
+        o = new Obj(); o.mesh = mBossTorso;
+        o.x = gx; o.y = gy; o.z = gz;
+        o.rotY = rotY; o.rotX = rotX;
+        o.sx = 0.06f; o.sy = 0.075f; o.sz = 0.36f;
+        o.tr = 0.15f; o.tg = 0.15f; o.tb = 0.17f; o.emissive = 0.06f;
+        drawObj(o);
+        // 枪口：永远比别人亮一点（开火时爆亮）
+        o = new Obj(); o.mesh = mBossTorso;
+        o.x = gx + fx * 0.21f; o.y = gy + fy * 0.21f; o.z = gz + fz * 0.21f;
+        o.rotY = rotY; o.rotX = rotX;
+        o.sx = 0.035f; o.sy = 0.035f; o.sz = 0.09f;
+        o.tr = 0.95f; o.tg = 0.93f; o.tb = 0.80f;
+        o.emissive = firing ? 1.6f : 0.55f;
+        drawObj(o);
     }
 
     private static float normAng(float a) {
