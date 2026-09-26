@@ -72,43 +72,8 @@ public class MainActivity extends Activity {
         nlp.gravity = Gravity.CENTER;
         root.addView(narrateView, nlp);
 
-        // ★#10 画质档位（经典版设置入口）
-        int q = SaveManager.getInt("settings:quality", 1);
-        applyQuality(q);
-        TextView gearQ = new TextView(this);
-        gearQ.setText("⚙");
-        gearQ.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        gearQ.setTextColor(0x77FFFFFF);
-        android.graphics.drawable.GradientDrawable gearBg = new android.graphics.drawable.GradientDrawable();
-        gearBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
-        gearBg.setColor(0x33101420);
-        gearBg.setStroke(2, 0x55D9BE86);
-        gearQ.setBackground(gearBg);
-        gearQ.setPadding(dp(12), dp(8), dp(12), dp(8));
-        FrameLayout.LayoutParams qlp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        qlp.gravity = Gravity.TOP | Gravity.END;
-        qlp.setMargins(0, dp(40), dp(14), 0);
-        root.addView(gearQ, qlp);
-        gearQ.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                final String[] opts = {"流畅 · 30fps / 0.75x", "均衡 · 45fps / 1.0x", "极致 · 60fps / 1.0x"};
-                new android.app.AlertDialog.Builder(MainActivity.this)
-                        .setTitle("画质")
-                        .setSingleChoiceItems(opts, SaveManager.getInt("settings:quality", 1),
-                                new android.content.DialogInterface.OnClickListener() {
-                                    @Override
-                                    public void onClick(android.content.DialogInterface d, int which) {
-                                        SaveManager.setInt("settings:quality", which);
-                                        applyQuality(which);
-                                        d.dismiss();
-                                    }
-                                })
-                        .setNegativeButton("取消", null)
-                        .show();
-            }
-        });
+        // ★ 画质固定最高档：1.0x 渲染 / 60fps，不可调
+        gameView.setQuality(1.0f, 60);
 
         // ★ 9秒黑屏：黑幕 + 白色等宽倒计时（docs/光线工程规则：白=她在数秒，不用红）
         blackOverlay = new View(this);
@@ -134,6 +99,7 @@ public class MainActivity extends Activity {
         flashView.setVisibility(View.GONE);
         root.addView(flashView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
 
         bloodLayer = new FrameLayout(this);
         bloodLayer.setVisibility(View.GONE);
@@ -512,12 +478,6 @@ public class MainActivity extends Activity {
                 }, 450L);
             }
         }, total);
-    }
-
-    private void applyQuality(int q) {
-        if (q == 0)      gameView.setQuality(0.75f, 30);
-        else if (q == 2) gameView.setQuality(1.0f, 60);
-        else             gameView.setQuality(1.0f, 45);
     }
 
     private int dp(int v) {

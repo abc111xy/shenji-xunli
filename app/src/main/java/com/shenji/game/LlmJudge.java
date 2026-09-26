@@ -57,7 +57,8 @@ public final class LlmJudge {
                 Verdict v = null;
                 try {
                     v = callApi(q, answer, history);
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    DebugLog.logErr("llm", "请求失败", t);
                     v = null;
                 }
                 if (v == null || v.reply == null || v.reply.length() == 0) {

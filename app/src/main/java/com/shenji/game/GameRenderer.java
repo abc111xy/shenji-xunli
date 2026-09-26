@@ -1578,7 +1578,8 @@ public class GameRenderer implements GLSurfaceView.Renderer {
 
     private void onHit() {
         if (blind) return;          // 黑屏中免疫重复命中（防倒计时重复触发）
-        blind = true; blindT = 9f; deaths++;
+        startBlackout(false);       // ★修复：必须重置 blindEndFired/lastBlindSec，否则 updateBlind 的结束分支永远进不去，倒计时会数到负数且永不还视觉
+        deaths++;
         narrate("光穿过了你。祂取走了你的视觉。");
     }
 

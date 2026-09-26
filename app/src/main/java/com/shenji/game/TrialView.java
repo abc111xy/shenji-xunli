@@ -304,9 +304,10 @@ public class TrialView extends View {
 
         final android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(getContext())
                 .setTitle("自定义回答")
-                .setMessage("祂不接受套话。你的话将由祂亲自审判——答错，脚下即无界。")
+                .setMessage("祂不接受套话。你的话将由祂亲自审判——答错，脚下即无界。\n\n呈上 = 大模型审判（agnes）· jev 呈上 = 结构化天平审判（匿名·免费）")
                 .setView(box)
                 .setPositiveButton("呈 上", null)   // 手动接管，挡空回答
+                .setNeutralButton("jev 呈上", null)  // ★ jev 模式：jev-1.13-free 结构化审判
                 .setNegativeButton("退 回", null)
                 .create();
         dlg.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
@@ -319,7 +320,17 @@ public class TrialView extends View {
                                 String t = et.getText().toString().trim();
                                 if (t.isEmpty()) return;
                                 dlg.dismiss();
-                                submitCustom(t);
+                                submitCustom(t, false);
+                            }
+                        });
+                ((android.app.AlertDialog) d).getButton(android.app.AlertDialog.BUTTON_NEUTRAL)
+                        .setOnClickListener(new View.OnClickListener() {
+                            @Override
+                            public void onClick(View v) {
+                                String t = et.getText().toString().trim();
+                                if (t.isEmpty()) return;
+                                dlg.dismiss();
+                                submitCustom(t, true);   // ★ jev 模式
                             }
                         });
             }
@@ -327,15 +338,15 @@ public class TrialView extends View {
         dlg.show();
     }
 
-    /** 呈上自定义回答：先进入「聆听」状态，模型判定回来后推进状态机 */
-    private void submitCustom(final String text) {
+    /** 呈上自定义回答：先进入「聆听」状态，判定回来后推进状态机；useJev=true 走 jev 结构化天平 */
+    private void submitCustom(final String text, final boolean useJev) {
         if (!awaiting || session == null) return;
         awaiting = false;
         judging = true;
         invalidate();
 
         final NineWines.Question q = session.question();
-        LlmJudge.judge(q, text, session.history, new LlmJudge.Callback() {
+        LlmJudge.Callback cb = new LlmJudge.Callback() {
             @Override
             public void onVerdict(final LlmJudge.Verdict v) {
                 post(new Runnable() {
@@ -343,6 +354,14 @@ public class TrialView extends View {
                     public void run() {
                         judging = false;
                         if (session == null) return;
+                        if (v.kind < 0) {
+                            // ★ 审判失败（如 429）：亮错误，不落账，允许重新呈上
+                            reply = v.reply;
+                            tReply = System.currentTimeMillis();
+                            awaiting = true;
+                            invalidate();
+                            return;
+                        }
                         last = session.answerCustom(text, v.kind);
                         reply = v.reply;
                         tReply = System.currentTimeMillis();
@@ -350,7 +369,9 @@ public class TrialView extends View {
                     }
                 });
             }
-        });
+        };
+        if (useJev) JevJudge.judge(q, text, session.history, cb);
+        else LlmJudge.judge(q, text, session.history, cb);
     }
 
     private void nextRound() {
